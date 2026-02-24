@@ -80,6 +80,9 @@ profile-gz = "samply record -s -o gz.json.gz ./target/release/fdedup data/E14_se
 samply = "*"
 inferno = "*"
 
+[tasks]
+fdedup = "./target/release/fdedup"
+
 [environments]
 rapport = { features = ["rapport"], no-default-feature = true }
 bench = ["bench"]
