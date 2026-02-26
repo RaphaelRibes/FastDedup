@@ -20,13 +20,14 @@ FDedup (FastDedup) is a fast and memory-efficient FASTX PCR deduplication tool w
 ## Usage
 
 ```bash
-fdedup <input_file> [output_file] [--force] [--verbose|-v]
+fdedup <input_file> [output_file] [--force] [--verbose|-v] [--dryrun|-d]
 ```
 
 - `<input_file>`: Path to the input FASTA/FASTQ/GZ file.
 - `[output_file]`: Path to the output file (optional). Defaults to `output.fastq.gz`.
 - `--force`: Overwrite the output file if it exists (instead of pre-loading hashes and appending).
 - `--verbose` or `-v`: Print processing stats, such as execution time, number of sequences, and duplication rates.
+- `--dryrun` or `-d`: Calculate duplication rate without creating an output file.
   singularity run fdedup.sif fdedup
 
 ### Run it from Cargo
@@ -34,7 +35,7 @@ fdedup <input_file> [output_file] [--force] [--verbose|-v]
 You can run it directly from Cargo:
 
 ```bash
-cargo run --release -- <input_file> [output_file] [--force] [--verbose|-v]
+cargo run --release -- <input_file> [output_file] [--force] [--verbose|-v] [--dryrun|-d]
 ```
 
 ### Run with Pixi
@@ -43,7 +44,7 @@ You can also rely on Pixi to run:
 
 ```bash
 pixi run cargo build --release
-pixi run fdedup <input_file> [output_file] [--force] [--verbose|-v]
+pixi run fdedup <input_file> [output_file] [--force] [--verbose|-v] [--dryrun|-d]
 ```
 
 ### Run with Singularity / Apptainer
@@ -51,8 +52,9 @@ pixi run fdedup <input_file> [output_file] [--force] [--verbose|-v]
 A pre-built Singularity image (`fdedup.sif`) is available for immediate use. You can run the application directly through it:
 
 ```bash
-singularity run fdedup.sif fdedup <input_file> [output_file] [--force] [--verbose|-v]
+singularity run fdedup.sif fdedup <input_file> [output_file] [--force] [--verbose|-v] [--dryrun|-d]
 ```
+
 > Note: `--force` is very slow when used in a Singularity container. We recommend just deleting the output file before running the container if you want to start from scratch.
 
 ## Recommendations
@@ -72,9 +74,11 @@ However, if you output to an uncompressed format, FDedup will automatically dete
 - [ ] Improve error handling.
 
 ## License
+
 This project is licensed under the MIT License. See the [LICENSE](Licence) file for details.
 
 ## Author
+
 [Raphaël Ribes](https://www.raphaelrib.es)
 
 [Céline Mandier](https://gitlab.in2p3.fr/celine.mandier1)
