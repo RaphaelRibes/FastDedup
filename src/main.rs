@@ -19,6 +19,7 @@ fn dispatch
     estimated_capacity: usize,
     force: bool,
     verbose: bool,
+    dryrun: bool,
     hash_type: HashType
 ) 
     -> Result<(usize, usize)> 
@@ -26,11 +27,11 @@ fn dispatch
     match hash_type {
         HashType::XXH3_64 => {
             if verbose { println!("Mode: Hash 64 bits (Haute performance)"); }
-            executer_deduplication::<u64>(chemin_entree, chemin_sortie, force, verbose, estimated_capacity)
+            executer_deduplication::<u64>(chemin_entree, chemin_sortie, force, verbose, dryrun, estimated_capacity)
         },
         HashType::XXH3_128 => {
             if verbose { println!("Mode: Hash 128 bits (Haute sécurité collision)"); }
-            executer_deduplication::<u128>(chemin_entree, chemin_sortie, force, verbose, estimated_capacity)
+            executer_deduplication::<u128>(chemin_entree, chemin_sortie, force, verbose, dryrun, estimated_capacity)
         },
     }
 }
@@ -69,6 +70,7 @@ fn main() -> Result<()> {
         total_capacity,
         args.force,
         args.verbose,
+        args.dryrun,
         selected_hash_type
     )?;
 

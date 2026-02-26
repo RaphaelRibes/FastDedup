@@ -15,12 +15,36 @@ pub(crate) fn executer_deduplication<T: SequenceHasher + 'static>
     chemin_sortie: &str,
     force: bool,
     verbose: bool,
+    dryrun: bool,
     estimated_capacity: usize
 )
     -> Result<(usize, usize)>
 {
 
     let mut checker = HashChecker::<T>::new(estimated_capacity);
+
+    if dryrun {
+        if verbose { println!("Option --dryrun activée : calcul du taux de duplication sans écriture de fichier."); }
+        let mut reader = parse_fastx_file(chemin_entree).context("Impossible de lire le fichier d'entrée")?;
+        let mut sequences_processed = 0;
+        let mut dups = 0;
+
+        while let Some(record) = reader.next() {
+            let seqrec = record.context("Données de séquence invalides")?;
+
+            let hash = T::hash_seq(&seqrec.seq());
+            let is_unique = checker.check(hash);
+
+            if !is_unique {
+            } else {
+                dups += 1;
+            }
+
+            sequences_processed += 1;
+        }
+
+        return Ok((sequences_processed, dups));
+    }
 
     // --- PRÉCHARGEMENT ---
     let path_out = Path::new(chemin_sortie);
