@@ -79,6 +79,8 @@ time = "*"
 bc = "*"
 wget = "*"
 gzip = "*"
+bbmap = ">=39.77,<40"
+fastuniq = ">=1.1,<2"
 
 
 ### RAPPORT

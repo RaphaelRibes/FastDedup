@@ -7,6 +7,7 @@
 #SBATCH --partition=cpu-dedicated
 #SBATCH --account=dedicated-cpu@cirad-normal
 
-pixi run cargo build --release --bin benchmark/bin
+pixi run cargo build --release
+cp ../target/release/fdedup /bin/
 pixi run -e bench ./benchmark.sh
 pixi run -e bench python plotit.py

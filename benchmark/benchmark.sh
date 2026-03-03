@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=bench_fdedup
+#SBATCH --job-name=bench_tools
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=32G
@@ -16,8 +16,7 @@ RESULTS_CSV="benchmark_results.csv"
 GENOME_FA="$DATA_DIR/hg38.fa"
 
 # Estimation : 150bp SE FASTQ ~ 320 lectures par Mo (environ)
-# Donc pour 1 Go non compressé, il faut environ 3.2 Millions de lectures.
-READS_PER_GB=3200000 
+READS_PER_GB=3200000
 
 mkdir -p "$DATA_DIR"
 
@@ -33,61 +32,78 @@ if [ ! -f "$GENOME_FA" ]; then
 fi
 
 # Initialisation du fichier de résultats
-echo "Taille_Cible_Go,Taille_Reelle_Go,Temp_Ecoule,RAM_Max_Mo" > "$RESULTS_CSV"
+echo "Outil,Taille_Cible_Go,Taille_Reelle_Go,Temp_Ecoule,RAM_Max_Mo" > "$RESULTS_CSV"
 
-# 2. Boucle de benchmark (de 5 à 100 Go)
+# Fonction pour extraire et sauvegarder les métriques
+extract_metrics() {
+    local tool=$1
+    local log_file=$2
+    local size_gb=$3
+    local actual_size=$4
+
+    local wall_time=$(grep "Elapsed (wall clock) time" "$log_file" | awk '{print $NF}')
+    local max_ram_kb=$(grep "Maximum resident set size" "$log_file" | awk '{print $NF}')
+    local max_ram_mb=$(echo "scale=2; $max_ram_kb / 1024" | bc)
+
+    echo "${tool},${size_gb},${actual_size},${wall_time},${max_ram_mb}" >> "$RESULTS_CSV"
+    echo "-> [$tool] Temps : $wall_time | RAM Max : $max_ram_mb Mo"
+}
+
+# 2. Boucle de benchmark
 for size_gb in {5,10,15,20,25,30,40,50,60,70,80,90,100}; do
-    
+
     echo "=================================================="
-    echo "Palier ${size_gb}Go : Génération et ajout de données..."
-    
-    # Calcul du nombre de lectures nécessaire pour atteindre la taille cible (non compressée)
-    # Note: Cette estimation dépend de la longueur des headers. 
-    # On ajuste le nombre de lectures (-N) pour approcher la taille demandée.
-    TARGET_READS=$((size_gb * READS_PER_GB))
-    
-    echo "Nombre de lectures estimé : ${TARGET_READS}"
-    
-    # Génération d'un nouveau fichier avec wgsim (seed = $i pour la variabilité)
-    # On génère du single-end ici (on ignore le read2) pour simplifier l'input de fdedup
-    # Le fichier est généré en .fq (non compressé)
-    
-    OUT_TMP="$DATA_DIR/tmp_${size_gb}GB.fq"
-    wgsim -N $TARGET_READS -1 150 -2 150 -S ${size_gb} "$GENOME_FA" "$OUT_TMP" /dev/null > /dev/null
-    
-    # Mesure de la taille réelle du fichier généré (non compressé)
-    ACTUAL_SIZE_BYTES=$(wc -c < "$OUT_TMP")
+    echo "Palier ${size_gb}Go : Génération des données PE..."
+
+    # Division par 2 car on génère des paires (R1 + R2 = Taille Cible)
+    TARGET_READS=$((size_gb * READS_PER_GB / 2))
+
+    OUT_R1="$DATA_DIR/tmp_${size_gb}GB_R1.fq"
+    OUT_R2="$DATA_DIR/tmp_${size_gb}GB_R2.fq"
+    OUT_SE="$DATA_DIR/tmp_${size_gb}GB_SE.fq"
+
+    # Génération Paired-End
+    wgsim -N $TARGET_READS -1 150 -2 150 -S ${size_gb} "$GENOME_FA" "$OUT_R1" "$OUT_R2" > /dev/null 2>&1
+
+    # Concaténation pour fdedup (pour qu'il traite exactement le même volume de données)
+    cat "$OUT_R1" "$OUT_R2" > "$OUT_SE"
+
+    # Mesure de la taille réelle (basée sur le fichier concaténé)
+    ACTUAL_SIZE_BYTES=$(wc -c < "$OUT_SE")
     ACTUAL_SIZE_GB=$(echo "scale=2; $ACTUAL_SIZE_BYTES / 1073741824" | bc)
-    
-    echo "Taille réelle générée : ${ACTUAL_SIZE_GB} Go (Cible: ${size_gb} Go)"
-    
-    if [ "$ACTUAL_SIZE_GB" -lt "$((size_gb * 1))" ]; then
-        echo "Avertissement : Le fichier est beaucoup plus petit que la cible. Vérifiez l'espace disque."
-    fi
-    
+    echo "Taille réelle totale générée : ${ACTUAL_SIZE_GB} Go (Cible: ${size_gb} Go)"
+
+    # ---------------------------------------------------------
+    # Benchmarks des outils
+    # ---------------------------------------------------------
+
+    # 1. FDedup (sur le fichier concaténé SE)
     echo "Lancement de fdedup..."
-    
-    # 3. Exécution et profilage sur le fichier non compressé (.fq)
-    OUT_FILE="$DATA_DIR/out_${size_gb}GB.fastq.gz"
-    LOG_FILE="$DATA_DIR/time_${size_gb}.log"
-    
-    /usr/bin/env time -v "$FDEDUP" --forcer "$OUT_TMP" "$OUT_FILE" 2> "$LOG_FILE"
-    
-    # 4. Extraction des métriques
-    # Le temps au format (h:mm:ss ou m:ss)
-    WALL_TIME=$(grep "Elapsed (wall clock) time" "$LOG_FILE" | awk '{print $NF}')
-    
-    # Max RSS en Kilo-octets, converti en Méga-octets
-    MAX_RAM_KB=$(grep "Maximum resident set size" "$LOG_FILE" | awk '{print $NF}')
-    MAX_RAM_MB=$(echo "scale=2; $MAX_RAM_KB / 1024" | bc)
-    
-    echo "-> Temps : $WALL_TIME | RAM Max : $MAX_RAM_MB Mo"
-    
-    # Sauvegarde dans le CSV (Taille cible, Taille réelle, Temps, RAM)
-    echo "${size_gb},${ACTUAL_SIZE_GB},${WALL_TIME},${MAX_RAM_MB}" >> "$RESULTS_CSV"
-    
-    # Nettoyage des fichiers lourds de l'itération pour préserver le disque
-    rm -f "$OUT_TMP" "$DATA_DIR/tmp_${size_gb}GB.fq"
+    LOG_FDEDUP="$DATA_DIR/time_fdedup.log"
+    /usr/bin/env time -v "$FDEDUP" --forcer "$OUT_SE" "$DATA_DIR/out_fdedup.fastq.gz" 2> "$LOG_FDEDUP"
+    extract_metrics "fdedup" "$LOG_FDEDUP" "$size_gb" "$ACTUAL_SIZE_GB"
+
+    # 2. Fastp (sur les fichiers PE)
+    echo "Lancement de fastp..."
+    LOG_FASTP="$DATA_DIR/time_fastp.log"
+    /usr/bin/env time -v fastp --in1 "$OUT_R1" --in2 "$OUT_R2" --out1 "$DATA_DIR/out_fastp_R1.fq.gz" --out2 "$DATA_DIR/out_fastp_R2.fq.gz" --dedup --thread 6 2> "$LOG_FASTP" > /dev/null
+    extract_metrics "fastp" "$LOG_FASTP" "$size_gb" "$ACTUAL_SIZE_GB"
+
+    # 3. FastUniq (sur les fichiers PE via fichier liste)
+    echo "Lancement de fastuniq..."
+    LOG_FASTUNIQ="$DATA_DIR/time_fastuniq.log"
+    echo -e "$OUT_R1\n$OUT_R2" > "$DATA_DIR/fastuniq_input.txt"
+    /usr/bin/env time -v fastuniq -i "$DATA_DIR/fastuniq_input.txt" -t q -o "$DATA_DIR/out_fastuniq_R1.fq" -p "$DATA_DIR/out_fastuniq_R2.fq" 2> "$LOG_FASTUNIQ"
+    extract_metrics "fastuniq" "$LOG_FASTUNIQ" "$size_gb" "$ACTUAL_SIZE_GB"
+
+    # 4. Clumpify (sur les fichiers PE, deduplication stricte)
+    echo "Lancement de clumpify..."
+    LOG_CLUMPIFY="$DATA_DIR/time_clumpify.log"
+    /usr/bin/env time -v clumpify.sh in="$OUT_R1" in2="$OUT_R2" out="$DATA_DIR/out_clumpify_R1.fq.gz" out2="$DATA_DIR/out_clumpify_R2.fq.gz" dedupe=t subs=0 2> "$LOG_CLUMPIFY"
+    extract_metrics "clumpify" "$LOG_CLUMPIFY" "$size_gb" "$ACTUAL_SIZE_GB"
+
+    # Nettoyage des fichiers lourds de l'itération
+    rm -f "$OUT_R1" "$OUT_R2" "$OUT_SE" "$DATA_DIR"/out_* "$DATA_DIR"/time_* "$DATA_DIR"/fastuniq_input.txt
 done
 
 echo "=================================================="
