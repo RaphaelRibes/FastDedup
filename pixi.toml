@@ -91,6 +91,9 @@ typst = "*"
 description = "Compile the Typst report to PDF"
 cmd = "typst compile --root . ./rapport/rapport.typ ./rapport/rapport.pdf"
 
+[feature.rapport.tasks.watch_rapport]
+cmd = "typst watch --root . ./rapport/rapport.typ ./rapport/rapport.pdf"
+
 
 ### PROFILE
 [feature.profile.tasks._profile-normal]
