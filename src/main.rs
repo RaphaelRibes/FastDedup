@@ -3,196 +3,193 @@ mod hasher;
 mod processor;
 mod utils;
 
-use crate::hasher::TypeDeHachage;
-use crate::processor::{executer_deduplication, executer_deduplication_paire};
-use crate::utils::estimer_capacite_sequences;
-use crate::utils::recuperer_methode_de_hachage;
+use crate::hasher::HashType;
+use crate::processor::{execute_deduplication, execute_paired_deduplication};
+use crate::utils::estimate_sequence_capacity;
+use crate::utils::get_hash_method;
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, ModeHachage};
+use cli::{Cli, HashMode};
 use std::time::Instant;
 
-fn distribuer(
-    chemin_entree: &str,
-    chemin_sortie: &str,
-    capacite_estimee: usize,
-    forcer: bool,
-    verbeux: bool,
-    simulation: bool,
-    type_de_hachage: TypeDeHachage,
-)
-    -> Result<(usize, usize)>
-{
-    match type_de_hachage {
-        TypeDeHachage::XXH3_64 => {
-            if verbeux {
-                println!("Mode Single-End : Hachage 64 bits");
+/// Dispatches single-end deduplication based on the selected hash type.
+fn dispatch(
+    input_path: &str,
+    output_path: &str,
+    estimated_capacity: usize,
+    force: bool,
+    verbose: bool,
+    dry_run: bool,
+    hash_type: HashType,
+) -> Result<(usize, usize)> {
+    match hash_type {
+        HashType::XXH3_64 => {
+            if verbose {
+                println!("Single-End Mode: 64-bit Hash");
             }
-            executer_deduplication::<u64>(
-                chemin_entree,
-                chemin_sortie,
-                forcer,
-                verbeux,
-                simulation,
-                capacite_estimee,
+            execute_deduplication::<u64>(
+                input_path,
+                output_path,
+                force,
+                verbose,
+                dry_run,
+                estimated_capacity,
             )
         }
-        TypeDeHachage::XXH3_128 => {
-            if verbeux {
-                println!("Mode Single-End : Hachage 128 bits");
+        HashType::XXH3_128 => {
+            if verbose {
+                println!("Single-End Mode: 128-bit Hash");
             }
-            executer_deduplication::<u128>(
-                chemin_entree,
-                chemin_sortie,
-                forcer,
-                verbeux,
-                simulation,
-                capacite_estimee,
+            execute_deduplication::<u128>(
+                input_path,
+                output_path,
+                force,
+                verbose,
+                dry_run,
+                estimated_capacity,
             )
         }
     }
 }
 
-// Nouvelle fonction de distribution pour le mode Paired-End
-fn distribuer_paire(
-    chemin_entree_r1: &str,
-    chemin_entree_r2: &str,
-    chemin_sortie_r1: &str,
-    chemin_sortie_r2: &str,
-    capacite_estimee: usize,
-    forcer: bool,
-    verbeux: bool,
-    simulation: bool,
-    type_de_hachage: TypeDeHachage,
-)
-    -> Result<(usize, usize)>
-{
-    match type_de_hachage {
-        TypeDeHachage::XXH3_64 => {
-            if verbeux {
-                println!("Mode Paired-End : Hachage 64 bits combiné");
+/// Dispatches paired-end deduplication based on the selected hash type.
+fn dispatch_paired(
+    input_r1: &str,
+    input_r2: &str,
+    output_r1: &str,
+    output_r2: &str,
+    estimated_capacity: usize,
+    force: bool,
+    verbose: bool,
+    dry_run: bool,
+    hash_type: HashType,
+) -> Result<(usize, usize)> {
+    match hash_type {
+        HashType::XXH3_64 => {
+            if verbose {
+                println!("Paired-End Mode: 64-bit Combined Hash");
             }
-            executer_deduplication_paire::<u64>(
-                chemin_entree_r1,
-                chemin_entree_r2,
-                chemin_sortie_r1,
-                chemin_sortie_r2,
-                forcer,
-                verbeux,
-                simulation,
-                capacite_estimee,
+            execute_paired_deduplication::<u64>(
+                input_r1,
+                input_r2,
+                output_r1,
+                output_r2,
+                force,
+                verbose,
+                dry_run,
+                estimated_capacity,
             )
         }
-        TypeDeHachage::XXH3_128 => {
-            if verbeux {
-                println!("Mode Paired-End : Hachage 128 bits combiné");
+        HashType::XXH3_128 => {
+            if verbose {
+                println!("Paired-End Mode: 128-bit Combined Hash");
             }
-            executer_deduplication_paire::<u128>(
-                chemin_entree_r1,
-                chemin_entree_r2,
-                chemin_sortie_r1,
-                chemin_sortie_r2,
-                forcer,
-                verbeux,
-                simulation,
-                capacite_estimee,
+            execute_paired_deduplication::<u128>(
+                input_r1,
+                input_r2,
+                output_r1,
+                output_r2,
+                force,
+                verbose,
+                dry_run,
+                estimated_capacity,
             )
         }
     }
 }
 
 fn main() -> Result<()> {
-    let arguments = Cli::parse();
+    let args = Cli::parse();
 
-    if arguments.hachage.is_some() && arguments.seuil != 0.01 {
+    if args.hash.is_some() && args.threshold != 0.01 {
         eprintln!(
-            "Avertissement : --hachage spécifié, le seuil de sélection automatique ({}) est ignoré.",
-            arguments.seuil
+            "Warning: --hash specifies a hash size, so the automatic selection threshold ({}) is ignored.",
+            args.threshold
         );
     }
 
-    if arguments.verbeux {
-        println!("Fichier d'entrée principal (R1) : {}", arguments.entree);
-        println!("Fichier de sortie principal (R1) : {}", arguments.sortie);
+    if args.verbose {
+        println!("Primary input file (R1): {}", args.input);
+        println!("Primary output file (R1): {}", args.output);
     }
 
-    // On estime la capacité uniquement sur R1.
-    // En Paired-End, 1 paire = 1 fragment = 1 hachage, donc la taille de R1 suffit !
-    let cap_entree = estimer_capacite_sequences(&arguments.entree)
-        .context("Fichier d'entrée introuvable ou inaccessible")?;
+    // Estimate capacity based only on R1.
+    // In Paired-End, 1 pair = 1 fragment = 1 hash, so R1 size is sufficient!
+    let cap_input = estimate_sequence_capacity(&args.input)
+        .context("Input file not found or inaccessible")?;
 
-    let cap_sortie = if arguments.forcer {
+    let cap_output = if args.force {
         0
     } else {
-        estimer_capacite_sequences(&arguments.sortie).unwrap_or(0)
+        estimate_sequence_capacity(&args.output).unwrap_or(0)
     };
 
-    let capacite_totale = cap_entree + cap_sortie;
+    let total_capacity = cap_input + cap_output;
 
-    let type_de_hachage_selectionne = match arguments.hachage {
-        Some(ModeHachage::Bit64) => TypeDeHachage::XXH3_64,
-        Some(ModeHachage::Bit128) => TypeDeHachage::XXH3_128,
-        None => recuperer_methode_de_hachage(capacite_totale, arguments.seuil),
+    let selected_hash_type = match args.hash {
+        Some(HashMode::Bit64) => HashType::XXH3_64,
+        Some(HashMode::Bit128) => HashType::XXH3_128,
+        None => get_hash_method(total_capacity, args.threshold),
     };
 
-    if arguments.verbeux {
-        println!("Capacité totale de la table de hachage estimée à {} fragments", capacite_totale);
+    if args.verbose {
+        println!("Total estimated hash table capacity: {} fragments", total_capacity);
     }
 
-    let debut = Instant::now();
+    let start = Instant::now();
 
-    // Logique d'aiguillage Single-End vs Paired-End
-    let (traitees, duplications) = if let Some(entree_r2) = &arguments.entree_r2 {
+    // Routing Logic: Single-End vs Paired-End
+    let (processed, duplicates) = if let Some(input_r2) = &args.input_r2 {
 
-        // On s'assure que l'utilisateur a bien fourni un fichier de sortie pour R2
-        let sortie_r2 = arguments.sortie_r2.as_ref().expect(
-            "Erreur critique : L'argument --sortie-r2 (-p) est obligatoire lorsque --entree-r2 (-2) est utilisé."
+        // Ensure the user provided an output file for R2
+        let output_r2 = args.output_r2.as_ref().expect(
+            "Critical Error: The --output-r2 (-p) argument is required when --input-r2 (-2) is used."
         );
 
-        if arguments.verbeux {
-            println!("Fichier d'entrée secondaire (R2) : {}", entree_r2);
-            println!("Fichier de sortie secondaire (R2) : {}", sortie_r2);
-            println!("--- Lancement du traitement Paired-End ---");
+        if args.verbose {
+            println!("Secondary input file (R2): {}", input_r2);
+            println!("Secondary output file (R2): {}", output_r2);
+            println!("--- Starting Paired-End Processing ---");
         }
 
-        distribuer_paire(
-            &arguments.entree,
-            entree_r2,
-            &arguments.sortie,
-            sortie_r2,
-            capacite_totale,
-            arguments.forcer,
-            arguments.verbeux,
-            arguments.simulation,
-            type_de_hachage_selectionne,
+        dispatch_paired(
+            &args.input,
+            input_r2,
+            &args.output,
+            output_r2,
+            total_capacity,
+            args.force,
+            args.verbose,
+            args.dry_run,
+            selected_hash_type,
         )?
     } else {
-        if arguments.verbeux {
-            println!("--- Lancement du traitement Single-End ---");
+        if args.verbose {
+            println!("--- Starting Single-End Processing ---");
         }
 
-        distribuer(
-            &arguments.entree,
-            &arguments.sortie,
-            capacite_totale,
-            arguments.forcer,
-            arguments.verbeux,
-            arguments.simulation,
-            type_de_hachage_selectionne,
+        dispatch(
+            &args.input,
+            &args.output,
+            total_capacity,
+            args.force,
+            args.verbose,
+            args.dry_run,
+            selected_hash_type,
         )?
     };
 
-    if arguments.verbeux {
+    if args.verbose {
         println!(
-            "Fragments traités : {}\nDoublons supprimés : {:.2}%",
-            traitees,
-            if traitees > 0 {
-                duplications as f64 / traitees as f64 * 100.0
+            "Processed fragments: {}\nDuplicates removed: {:.2}%",
+            processed,
+            if processed > 0 {
+                duplicates as f64 / processed as f64 * 100.0
             } else {
                 0.0
             }
         );
-        println!("Temps d'exécution total : {:.2?}", debut.elapsed());
+        println!("Total execution time: {:.2?}", start.elapsed());
     }
 
     Ok(())

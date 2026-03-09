@@ -14,57 +14,59 @@ const ASCII_ART: &str = r#"
                                                   |__/
 "#;
 
+/// Command Line Interface (CLI) configuration for FDedup.
 #[derive(Parser, Debug)]
 #[command(
     author,
     version,
-    about = "Un outil de déduplication PCR FASTX rapide et économe en mémoire (Mode Paired-End)",
+    about = "A fast and memory-efficient FASTX PCR deduplication tool (Supports Paired-End)",
     before_help = ASCII_ART,
     arg_required_else_help = true
 )]
 #[command(help_expected = true)]
 pub struct Cli {
-    /// Chemin vers le fichier FASTX d'entrée (R1 ou Single-End)
+    /// Path to the input FASTX file (R1 or Single-End)
     #[arg(required = true, short = '1', long)]
-    pub entree: String,
+    pub input: String,
 
-    /// Chemin vers le fichier FASTX d'entrée R2 (Optionnel, active le mode Paired-End)
+    /// Path to the R2 input FASTX file (Optional, enables Paired-End mode)
     #[arg(short = '2', long)]
-    pub entree_r2: Option<String>,
+    pub input_r2: Option<String>,
 
-    /// Chemin vers le fichier de sortie (R1 ou Single-End)
-    /// Formats supportés: .fastq, .fq, .fasta, .fa, .fna (+ .gz pour compression)
-    #[arg(short = 'o', long, default_value = "sortie_R1.fastq.gz")]
-    pub sortie: String,
+    /// Path to the output file (R1 or Single-End)
+    /// Supported formats: .fastq, .fq, .fasta, .fa, .fna (+ .gz for compression)
+    #[arg(short = 'o', long, default_value = "output_R1.fastq.gz")]
+    pub output: String,
 
-    /// Chemin vers le fichier de sortie R2 (Requis si --entree-r2 est fourni)
-    /// Doit avoir le même format que --sortie
+    /// Path to the R2 output file (Required if --input-r2 is provided)
+    /// Must have the same format as --output
     #[arg(short = 'p', long)]
-    pub sortie_r2: Option<String>,
+    pub output_r2: Option<String>,
 
-    /// Forcer l'écrasement des fichiers de sortie si ils existent
+    /// Force overwrite of output files if they exist
     #[arg(long, short)]
-    pub forcer: bool,
+    pub force: bool,
 
-    /// Activer les journaux verbeux
+    /// Enable verbose logs
     #[arg(long, short)]
-    pub verbeux: bool,
+    pub verbose: bool,
 
-    /// Calculer le taux de duplication sans créer de fichiers de sortie
+    /// Calculate the duplication rate without creating output files
     #[arg(long, short = 's')]
-    pub simulation: bool,
+    pub dry_run: bool,
 
-    /// Seuil pour la sélection automatique de la taille de hachage (ignoré si --hachage est défini)
-    #[arg(long, short = 'l', default_value_t = 0.01)]
-    pub seuil: f64,
+    /// Threshold for automatic hashing size selection (ignored if --hash is set)
+    #[arg(long, short = 't', default_value_t = 0.01)]
+    pub threshold: f64,
 
-    /// Spécifier manuellement la taille de hachage (64 ou 128 bits)
+    /// Manually specify the hashing size (64 or 128 bits)
     #[arg(long, short = 'H')]
-    pub hachage: Option<ModeHachage>,
+    pub hash: Option<HashMode>,
 }
 
+/// The selected hash mode (64-bit or 128-bit)
 #[derive(ValueEnum, Clone, Debug)]
-pub enum ModeHachage {
+pub enum HashMode {
     #[value(name = "64")]
     Bit64,
     #[value(name = "128")]

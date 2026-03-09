@@ -6,175 +6,183 @@ use std::{fs, io};
 use std::fs::{File, OpenOptions};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use crate::hasher::{HacheurDeSequence, TypeDeHachage, VerificateurHachage};
+use crate::hasher::{SequenceHasher, HashType, HashVerifier};
 
+/// Supported output formats for sequences.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum FormatSortie {
+pub enum OutputFormat {
     Fasta,
     Fastq,
 }
 
-impl FormatSortie {
-    pub fn depuis_extension(chemin: &Path) -> Self {
-        let chemin_str = chemin.to_string_lossy().to_lowercase();
+impl OutputFormat {
+    /// Determines the output format based on the file extension.
+    pub fn from_extension(path: &Path) -> Self {
+        let path_str = path.to_string_lossy().to_lowercase();
 
-        // Vérifier d'abord si c'est compressé
-        let sans_gz = chemin_str.strip_suffix(".gz").unwrap_or(&chemin_str);
+        // Check if it's compressed first
+        let without_gz = path_str.strip_suffix(".gz").unwrap_or(&path_str);
 
-        if sans_gz.ends_with(".fasta") || sans_gz.ends_with(".fa") || sans_gz.ends_with(".fna") {
-            FormatSortie::Fasta
+        if without_gz.ends_with(".fasta") || without_gz.ends_with(".fa") || without_gz.ends_with(".fna") {
+            OutputFormat::Fasta
         } else {
-            // Par défaut FASTQ (.fastq, .fq, ou autre)
-            FormatSortie::Fastq
+            // Default to FASTQ
+            OutputFormat::Fastq
         }
     }
 
-    pub fn est_gz(chemin: &Path) -> bool {
-        chemin.to_string_lossy().to_lowercase().ends_with(".gz")
+    /// Checks if the file path indicates a gzipped file.
+    pub fn is_gz(path: &Path) -> bool {
+        path.to_string_lossy().to_lowercase().ends_with(".gz")
     }
 }
 
-pub fn recuperer_methode_de_hachage(taille: usize, seuil: f64) -> TypeDeHachage {
-    if (2f64 * 2.0f64.powi(64) * seuil).sqrt() < taille as f64 {
-        TypeDeHachage::XXH3_128
+/// Returns the appropriate `HashType` given the dataset size and collision probability threshold.
+pub fn get_hash_method(size: usize, threshold: f64) -> HashType {
+    if (2f64 * 2.0f64.powi(64) * threshold).sqrt() < size as f64 {
+        HashType::XXH3_128
     } else {
-        TypeDeHachage::XXH3_64
+        HashType::XXH3_64
     }
 }
 
-pub fn preparer_ecrivain(chemin: &Path, forcer: bool) -> Result<(Box<dyn Write>, FormatSortie)> {
-    let format = FormatSortie::depuis_extension(chemin);
-    let est_gz = FormatSortie::est_gz(chemin);
+/// Prepares a writer for the output file based on the format and whether it should be forced (overwritten) or appended.
+pub fn prepare_writer(path: &Path, force: bool) -> Result<(Box<dyn Write>, OutputFormat)> {
+    let format = OutputFormat::from_extension(path);
+    let is_gz = OutputFormat::is_gz(path);
 
-    let fichier = if chemin.exists() && !forcer {
-        OpenOptions::new().append(true).open(chemin)
-            .with_context(|| format!("Impossible d'ouvrir le fichier en ajout : {:?}", chemin))?
+    let file = if path.exists() && !force {
+        OpenOptions::new().append(true).open(path)
+            .with_context(|| format!("Failed to open file in append mode: {:?}", path))?
     } else {
-        File::create(chemin)
-            .with_context(|| format!("Impossible de créer le fichier : {:?}", chemin))?
+        File::create(path)
+            .with_context(|| format!("Failed to create file: {:?}", path))?
     };
 
-    let ecrivain: Box<dyn Write> = if est_gz {
-        Box::new(GzEncoder::new(fichier, Compression::default()))
+    let writer: Box<dyn Write> = if is_gz {
+        Box::new(GzEncoder::new(file, Compression::default()))
     } else {
-        Box::new(fichier)
+        Box::new(file)
     };
 
-    Ok((ecrivain, format))
+    Ok((writer, format))
 }
 
-pub fn estimer_capacite_sequences<P: AsRef<Path>>(chemin: P) -> Result<usize> {
-    let chemin_precis = chemin.as_ref();
-    if !chemin_precis.exists() {
+/// Estimates the number of sequences in a file to pre-allocate memory.
+pub fn estimate_sequence_capacity<P: AsRef<Path>>(path: P) -> Result<usize> {
+    let path_ref = path.as_ref();
+    if !path_ref.exists() {
         return Ok(0);
     }
 
-    let metadonnees = fs::metadata(chemin_precis)?;
-    let taille_fichier_octets = metadonnees.len();
-    let est_gz = chemin_precis.extension().and_then(|s| s.to_str()) == Some("gz");
+    let metadata = fs::metadata(path_ref)?;
+    let file_size_bytes = metadata.len();
+    let is_gz = path_ref.extension().and_then(|s| s.to_str()) == Some("gz");
 
-    let capacite_estimee = if est_gz {
-        (taille_fichier_octets / 80) as usize
+    let estimated_capacity = if is_gz {
+        (file_size_bytes / 80) as usize
     } else {
-        (taille_fichier_octets / 350) as usize
+        (file_size_bytes / 350) as usize
     };
 
-    Ok(capacite_estimee)
+    Ok(estimated_capacity)
 }
 
-pub fn precharger_hachages_existants<T: HacheurDeSequence>(
-    chemin: &str,
-    verificateur: &mut VerificateurHachage<T>,
-    verbeux: bool,
+/// Preloads existing hashes into memory from an existing output file (Single-End).
+pub fn preload_existing_hashes<T: SequenceHasher>(
+    path: &str,
+    verifier: &mut HashVerifier<T>,
+    verbose: bool,
 ) -> Result<(usize, u64)> {
-    if !Path::new(chemin).exists() {
+    if !Path::new(path).exists() {
         return Ok((0, 0));
     }
 
-    if verbeux {
-        println!("Préchargement des séquences depuis la sortie existante...");
+    if verbose {
+        println!("Preloading sequences from existing output...");
     }
 
-    let mut lecteur = parse_fastx_file(chemin)
-        .context("Erreur lors de l'ouverture du fichier de préchargement")?;
-    let mut compte = 0;
-    let mut octets_valides = CompteurDOctets(0);
+    let mut reader = parse_fastx_file(path)
+        .context("Error opening preload file")?;
+    let mut count = 0;
+    let mut valid_bytes = ByteCounter(0);
 
-    while let Some(enregistrement_resultat) = lecteur.next() {
-        match enregistrement_resultat {
-            Ok(enregistrement) => {
-                let hachage = T::hacher_sequence(&enregistrement.seq());
-                verificateur.verifier(hachage);
+    while let Some(record_result) = reader.next() {
+        match record_result {
+            Ok(record) => {
+                let hash = T::hash_sequence(&record.seq());
+                verifier.verify(hash);
 
-                compte += 1;
-                let _ = enregistrement.write(&mut octets_valides, None);
+                count += 1;
+                let _ = record.write(&mut valid_bytes, None);
             }
             Err(e) => {
-                if verbeux {
-                    eprintln!("Séquence incomplète détectée à la fin du fichier ({}).", e);
-                    eprintln!("Calcul du point de troncature de sécurité...");
+                if verbose {
+                    eprintln!("Incomplete sequence detected at end of file ({}).", e);
+                    eprintln!("Calculating fail-safe truncation point...");
                 }
                 break;
             }
         }
     }
 
-    Ok((compte, octets_valides.0))
+    Ok((count, valid_bytes.0))
 }
 
-pub fn precharger_hachages_existants_paire<T: HacheurDeSequence>(
-    chemin_r1: &str,
-    chemin_r2: &str,
-    verificateur: &mut VerificateurHachage<T>,
-    verbeux: bool,
+/// Preloads existing hashes into memory from existing output files (Paired-End) and computes valid byte sizes to synchronize truncation.
+pub fn preload_existing_paired_hashes<T: SequenceHasher>(
+    path_r1: &str,
+    path_r2: &str,
+    verifier: &mut HashVerifier<T>,
+    verbose: bool,
 ) -> Result<(usize, u64, u64)> {
-    let path_r1 = Path::new(chemin_r1);
-    let path_r2 = Path::new(chemin_r2);
+    let path_r1_ref = Path::new(path_r1);
+    let path_r2_ref = Path::new(path_r2);
 
-    if !path_r1.exists() || !path_r2.exists() {
+    if !path_r1_ref.exists() || !path_r2_ref.exists() {
         return Ok((0, 0, 0));
     }
 
-    if verbeux {
-        println!("Préchargement et synchronisation des paires depuis les sorties existantes...");
+    if verbose {
+        println!("Preloading and synchronizing pairs from existing outputs...");
     }
 
-    let mut lecteur_r1 = parse_fastx_file(chemin_r1).context("Erreur ouverture préchargement R1")?;
-    let mut lecteur_r2 = parse_fastx_file(chemin_r2).context("Erreur ouverture préchargement R2")?;
+    let mut reader_r1 = parse_fastx_file(path_r1).context("Error opening R1 preload file")?;
+    let mut reader_r2 = parse_fastx_file(path_r2).context("Error opening R2 preload file")?;
 
-    let mut compte = 0;
-    let mut octets_valides_r1 = CompteurDOctets(0);
-    let mut octets_valides_r2 = CompteurDOctets(0);
+    let mut count = 0;
+    let mut valid_bytes_r1 = ByteCounter(0);
+    let mut valid_bytes_r2 = ByteCounter(0);
 
-    while let (Some(enreg_r1_res), Some(enreg_r2_res)) = (lecteur_r1.next(), lecteur_r2.next()) {
-        match (enreg_r1_res, enreg_r2_res) {
-            (Ok(enreg_r1), Ok(enreg_r2)) => {
-                let hash_combine = T::hacher_paire(&enreg_r1.seq(), &enreg_r2.seq());
-                verificateur.verifier(hash_combine);
+    while let (Some(record_r1_res), Some(record_r2_res)) = (reader_r1.next(), reader_r2.next()) {
+        match (record_r1_res, record_r2_res) {
+            (Ok(record_r1), Ok(record_r2)) => {
+                let combined_hash = T::hash_pair(&record_r1.seq(), &record_r2.seq());
+                verifier.verify(combined_hash);
 
-                compte += 1;
-                let _ = enreg_r1.write(&mut octets_valides_r1, None);
-                let _ = enreg_r2.write(&mut octets_valides_r2, None);
+                count += 1;
+                let _ = record_r1.write(&mut valid_bytes_r1, None);
+                let _ = record_r2.write(&mut valid_bytes_r2, None);
             }
             _ => {
-                if verbeux {
-                    eprintln!("Séquence incomplète ou désynchronisation détectée en fin de fichier.");
-                    eprintln!("Calcul des points de troncature de sécurité pour R1 et R2...");
+                if verbose {
+                    eprintln!("Incomplete sequence or desynchronization detected at end of file.");
+                    eprintln!("Calculating fail-safe truncation points for R1 and R2...");
                 }
                 break;
             }
         }
     }
 
-    Ok((compte, octets_valides_r1.0, octets_valides_r2.0))
+    Ok((count, valid_bytes_r1.0, valid_bytes_r2.0))
 }
 
-struct CompteurDOctets(u64);
+struct ByteCounter(u64);
 
-impl Write for CompteurDOctets {
-    fn write(&mut self, tampon: &[u8]) -> io::Result<usize> {
-        self.0 += tampon.len() as u64;
-        Ok(tampon.len())
+impl Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 += buf.len() as u64;
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
