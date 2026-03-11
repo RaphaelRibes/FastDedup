@@ -10,9 +10,7 @@ dev
 fastqc
 multiqc_data
 data
-rapport
 fdedup.sif
 fdedup.def
-rapport
 benchmark/bin/
 demo_data

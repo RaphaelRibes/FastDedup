@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1580" height="360" viewBox="0 0 1580 360" font-family="Inter, system-ui, sans-serif">
+  <defs>
+        <marker id="arrow-end" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M1,1 L6,4 L1,7 z" fill="context-stroke" />
+        </marker>
+        <marker id="arrow-start" markerWidth="8" markerHeight="8" refX="2" refY="4" orient="auto" markerUnits="strokeWidth">
+            <path d="M7,1 L2,4 L7,7 z" fill="context-stroke" />
+        </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="white" />
+  <line x1="220.0" y1="227.2" x2="281.5" y2="226.4" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <line x1="415.7" y1="227.0" x2="491.8" y2="228.8" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="434.7" y="203.9" width="38.2" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="453.8" y="217.9" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">Yes</text>
+  </g>
+  <polyline points="574.6,255.7 574.6,280.5 900.0,280.5 1214.1,280.5 1214.1,251.5" fill="none" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <polyline points="1143.4,225.5 910.0,225.5 657.4,229.4" fill="none" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="892.0" y="211.5" width="36.0" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="910.0" y="225.5" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">No</text>
+  </g>
+  <line x1="1282.4" y1="226.3" x2="1359.0" y2="227.3" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="1301.6" y="202.8" width="38.2" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="1320.7" y="216.8" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">Yes</text>
+  </g>
+  <polyline points="1214.1,200.5 1214.1,160.8 1214.1,180.5 1214.1,105.0 1155.4,105.0" fill="none" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="1195.0" y="146.8" width="38.2" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="1214.1" y="160.8" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">Yes</text>
+  </g>
+  <polyline points="1080.0,130.0 1080.0,160.8 742.7,160.8 742.7,228.1 657.4,229.4" fill="none" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <line x1="350.0" y1="200.5" x2="350.0" y2="131.0" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="332.0" y="141.7" width="36.0" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="350.0" y="155.7" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">No</text>
+  </g>
+  <line x1="377.9" y1="120.6" x2="529.1" y2="205.3" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="435.5" y="138.9" width="36.0" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="453.5" y="152.9" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">No</text>
+  </g>
+  <line x1="424.4" y1="105.0" x2="503.6" y2="105.0" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="444.9" y="81.0" width="38.2" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="464.0" y="95.0" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">Yes</text>
+  </g>
+  <line x1="574.6" y1="130.0" x2="574.6" y2="204.7" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="555.5" y="143.4" width="38.2" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="574.6" y="157.4" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">Yes</text>
+  </g>
+  <line x1="644.6" y1="105.0" x2="753.5" y2="105.0" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <g pointer-events="none">
+    <rect x="681.1" y="81.0" width="36.0" height="28.0" rx="6" ry="6" fill="white" fill-opacity="0.96" stroke="#2d3748" stroke-width="1" />
+    <text x="699.1" y="95.0" fill="#2d3748" font-size="13" text-anchor="middle" dominant-baseline="middle" xml:space="preserve">No</text>
+  </g>
+  <line x1="925.5" y1="105.0" x2="1004.6" y2="105.0" stroke="#2d3748" stroke-width="2" marker-end="url(#arrow-end)" />
+  <rect x="80.0" y="203.1" width="140.0" height="50.0" rx="30" ry="30" fill="#c4f1f9" stroke="#2d3748" stroke-width="2" />
+  <text x="150.0" y="228.1" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">R1</text>
+  <polygon points="350.0,200.5 420.0,225.5 350.0,250.5 280.0,225.5" fill="#fbcfe8" stroke="#2d3748" stroke-width="2" />
+  <text x="350.0" y="225.5" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Dry run</text>
+  <rect x="492.8" y="205.7" width="163.6" height="50.0" rx="8" ry="8" fill="#fde68a" stroke="#2d3748" stroke-width="2" />
+  <text x="574.6" y="230.7" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Reader (input)</text>
+  <polygon points="1214.1,200.5 1284.8,225.5 1214.1,250.5 1143.4,225.5" fill="#fbcfe8" stroke="#2d3748" stroke-width="2" />
+  <text x="1214.1" y="225.5" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Hash unique</text>
+  <rect x="1360.0" y="203.1" width="140.0" height="50.0" rx="8" ry="8" fill="#fde68a" stroke="#2d3748" stroke-width="2" />
+  <text x="1430.0" y="228.1" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Writer</text>
+  <rect x="1005.6" y="80.0" width="148.8" height="50.0" rx="8" ry="8" fill="#fde68a" stroke="#2d3748" stroke-width="2" />
+  <text x="1080.0" y="105.0" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Add to table</text>
+  <polygon points="350.0,80.0 424.4,105.0 350.0,130.0 275.6,105.0" fill="#fbcfe8" stroke="#2d3748" stroke-width="2" />
+  <text x="350.0" y="105.0" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">output exist</text>
+  <polygon points="574.6,80.0 644.6,105.0 574.6,130.0 504.6,105.0" fill="#fbcfe8" stroke="#2d3748" stroke-width="2" />
+  <text x="574.6" y="105.0" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Compressed</text>
+  <rect x="754.5" y="80.0" width="171.0" height="50.0" rx="8" ry="8" fill="#fde68a" stroke="#2d3748" stroke-width="2" />
+  <text x="840.0" y="105.0" fill="#1a202c" font-size="14" text-anchor="middle" dominant-baseline="middle">Reader (output)</text>
+</svg>
