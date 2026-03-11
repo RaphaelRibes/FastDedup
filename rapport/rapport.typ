@@ -209,7 +209,6 @@ For paired-end data, `Clumpify` predominantly uses the first read (R1) to determ
 
 To manage memory, `Clumpify` implements a multi-phase strategy (KmerSplit and KmerSort).
 If the dataset exceeds available RAM, the tool can divide the data into temporary groups on the disk, sorting them individually before merging.
-This approach effectively lowers the time complexity from $O(N log N)$ to approximately $O(N log (N / "groups" ))$, theoretically allowing it to process unlimited data volumes.
 
 However, benchmarking shows that its reliance on the Java Virtual Machine (JVM) can lead to variable stability and high memory overhead on massive datasets.
 Sometimes it requires multi-threading just to maintain stability on large inputs like 500+ GB Hi-C datasets @Sigorskikh2025.
