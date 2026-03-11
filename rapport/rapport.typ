@@ -158,7 +158,7 @@ Before presenting our tool, we will first review the existing tools for reads de
 
 #pagebreak() 
 = -- Existing tools and limitations 
-== fastp
+== : Fastp
 
 `fastp` is a widely adopted, all-in-one FASTQ preprocessor written in C++ that performs quality control, adapter trimming, and deduplication within a single pass @Chen2018 @Chen2023.
 Unlike traditional alignment-based tools that require computationally expensive mapping and coordinate sorting, `fastp` operates directly on raw sequences.
@@ -175,7 +175,7 @@ However, this probabilistic approach involves a minor trade-off in absolute prec
 Furthermore, `fastp`'s deduplication algorithm relies heavily on the exact matching of sequence lengths and coordination regions. 
 Consequently, applying certain quality trimming operations (such as sliding-window trimming via `--cut_front` or `--cut_tail`) prior to deduplication can interfere with the duplicate identification process, as trimmed reads may no longer perfectly match their duplicate counterparts.
 
-== FastUniq
+== : FastUniq
 
 `FastUniq` @Xu2012 is a deterministic deduplication tool explicitly designed for paired-end (PE) short reads.
 By directly comparing the nucleotide sequences of read pairs, it provides an exact identification of PCR duplicates. 
@@ -195,7 +195,7 @@ Benchmarking studies have highlighted this as a severe limitation for modern hig
 Consequently, while highly accurate, `FastUniq` is often impractical for massive datasets without access to HPC clusters. 
 Furthermore, its scope is strictly limited to paired-end data, it does not tolerate sequence mismatches, and its deduplication output is known to be sensitive to the order of the input files.
 
-== Clumpify
+== : Clumpify
 
 `Clumpify`, a component of the Java-based BBTools suite @Bushnell2014, introduces a distinct algorithmic paradigm to duplicate removal based on $k$-mer grouping.
 Rather than relying on exact sequence hashing or global coordinate sorting, `Clumpify` identifies reads that share common $k$-mers and groups them into localized clusters or "clumps". 
@@ -213,7 +213,7 @@ If the dataset exceeds available RAM, the tool can divide the data into temporar
 However, benchmarking shows that its reliance on the Java Virtual Machine (JVM) can lead to variable stability and high memory overhead on massive datasets.
 Sometimes it requires multi-threading just to maintain stability on large inputs like 500+ GB Hi-C datasets @Sigorskikh2025.
 
-== SeqKit
+== : SeqKit
 
 `SeqKit` @Shen2016 @Shen2024 is a comprehensive, cross-platform, and ultra-fast toolkit for FASTA and FASTQ file manipulation.
 Written in the Go, it benefits from efficient concurrency management and the ability to produce static binaries with no external dependencies, making it highly accessible and stable across different operating systems.
@@ -229,7 +229,7 @@ The `rmdup` command evaluates and processes individual files independently.
 It will check duplicates inside each file separately, so if $R 1_1=R 1_2$ but $R 2_1 eq.not R 2_2$, $R 1_2$ in will be flagged as a duplicate and removed, while $R 2_2$ will be retained, leading to loss of data and desynchronization of the paired files.
 While workarounds exist using other SeqKit subcommands (such as `seqkit pair` to resynchronize files), `SeqKit rmdup` is generally considered the optimal choice strictly for single-end libraries.
 
-== CD-HIT-DUP
+== : CD-HIT-DUP
 
 `CD-HIT-DUP`, a specialized utility within the broader CD-HIT package @Fu2012 @Huang2010, is designed to identify and remove both identical and nearly-identical duplicates. 
 Unlike tools restricted to exact string matching, `CD-HIT-DUP` is particulary robust against sequencing errors. 
@@ -250,7 +250,7 @@ For massive modern datasets, such as a 538 GB Hi-C dataset, `CD-HIT-DUP` require
 Furthermore, practical deployment of `CD-HIT-DUP` in modern automated workflows requires caution.
 The tool has known stability issues in containerized environments (e.g., Docker and Singularity), occasionally throwing segmentation faults or I/O assertion errors when inputs are provided via process substitution from compressed files.
 
-== PRINSEQ++
+== : PRINSEQ++
 
 `PRINSEQ++` @Cantu2019 is a highly optimized C++ implementation of the Perl-based `prinseq-lite` program.
 It is designed to perform a comprehensive suite of quality control, filtering, trimming, and reformatting tasks for genomic and metagenomic sequence data.
@@ -268,7 +268,7 @@ However, the deduplication function (`-derep`) is strictly limited to exact dupl
 Furthermore, the probabilistic nature of the Bloom filter introduces a negligible but theoretically non-zero rate of false positives.
 Finally, when `PRINSEQ++` is executed with multiple threads, the output sequences are not guaranteed to remain in the same order as the input files, which may require consideration if downstream tools expect strict global index synchronization.
 
-== SAM/BAM ecosystem tools
+== : SAM/BAM ecosystem tools
 
 In addition to tools that operate directly on raw FASTQ sequences, the bioinformatics ecosystem relies heavily on utilities designed for SAM and BAM formats.
 PCR deduplication tools like such as `samtools` (via `markdup`) @Li2009 and Picard's `MarkDuplicates` @Picard. 
@@ -308,21 +308,94 @@ Because our primary objective is to evaluate and develop a highly optimized, mem
 = -- FastDedup: High-Performance FASTX Deduplication
 #v(1em)
 
-The primary goal behind the development of `FastDedup` (or `FDedup`) was to create a FASTX PCR deduplication tool that prioritizes maximum speed and memory efficiency. 
-
-To achieve this, the tool relies on `xxh3`, a rapid non-cryptographic hash function, to compute a unique fingerprint for each single-end or paired-end read.
+The primary goal behind the development of `FastDedup` (or `FDedup`) was to create a FASTX PCR deduplication tool that prioritizes maximum speed and memory efficiency.
+To achieve this, the tool relies on `xxh3` @Collet_xxHash @DoumanAsh_xxhash_rust, a rapid non-cryptographic hash function, to compute a unique fingerprint for each single-end or paired-end read.
 These fingerprints are securely cached in memory using `fxhash`, which provides a low-overhead memory footprint.
 
-FDedup provides users with precise control over the hash collision rate while maintaining high performance. It automatically scales its hashing strategy, seamlessly switching between 64-bit and 128-bit hashes based on the estimated input sequence count and a user-defined collision probability threshold.
+FDedup provides users with precise control over the hash collision rate while maintaining high performance.
+It automatically scales its hashing strategy, seamlessly switching between 64-bit and 128-bit hashes based on the estimated input sequence count and a user-defined collision probability threshold.
 
-Specifically designed for seamless integration into OMICS pipelines, the tool features robust incremental deduplication and auto-recovery mechanisms. 
+Specifically designed for seamless integration into OMICS pipelines, the tool features robust incremental deduplication and auto-recovery mechanisms.
 In the event of an interruption FDedup can safely preload existing hashes from the output file to prevent duplicate processing and smoothly resume operations.
 If an uncompressed output file becomes corrupted due to a crash, the tool automatically detects the issue, calculates a fail-safe truncation point, and truncates the file to the last valid sequence before continuing.
 
-Finally, a dry-run mode (`--dry-run` or `-s`) is available to calculate the duplication rate without writing any output files. Because file I/O operations account for the majority of execution time, this mode is exceptionally fast and serves as a highly efficient feature for pipeline planning and resource allocation.
+Finally, a dry-run mode (`--dry-run` or `-s`) is available to calculate the duplication rate without writing any output files.
+Because file I/O operations account for the majority of execution time, this mode is exceptionally fast and serves as a highly efficient feature for pipeline planning and data analyses.
+
+== : Algorithmic Complexity and Hardware-Level Optimizations
+#v(1em)
+
+The architectural principal of `FastDedup`'s performance lies in shifting the deduplication problem from a string-matching paradigm to an integer-matching paradigm.
+By transforming raw paired-end sequences (e.g., 2 x 150 b) into a single 64-bit hash, reducing the data by 37.5 times in both space and time complexity.
+
+=== Space Complexity and Memory Footprint
+
+In a traditional deterministic approach, storing a read pair requires retaining sequences of length $L$ (where $L = r_1 + r_2$).
+The space complexity for $N$ unique sequences scales linearly as $O(N times L)$.
+For a standard 150 bp paired-end dataset, each pair consumes at least 300 bytes of raw character data, plus substantial data structure overhead (e.g., string pointers and capacity metadata).
+Storing $10^8$ sequences typically exceeds 32 GB of RAM.
+By computing a 64-bit hash using `xxh3`, `FastDedup` compresses the sequence identity into exactly 8 bytes.
+This decouples the memory requirement from the read length, reducing the space complexity to $O(N)$ (since $8 << L$).
+
+=== Time Complexity and ALU Efficiency
+
+String-based deduplication necessitates sequential, byte-by-byte comparisons.
+In the worst-case scenario (ex: highly similar sequences or long identical prefixes), comparing two sequences requires $O(L)$ time.
+Conversely, while calculating the initial hash takes $O(L)$ time during the single-pass file reading, all subsequent identity verifications are reduced to integer operations.
+Comparing two 64-bit integers is executed natively by the CPU's Arithmetic Logic Unit (ALU) in exactly 1 clock cycle, effectively reducing the hash lookup and comparison time complexity to $O(1)$. 
+
+=== Cache Locality and Zero-Allocation Pipeline
+
+Beyond theoretical Big-$O$ improvements, the 8-byte hash architecture heavily exploits modern CPU hardware design.
+Processors fetch data from RAM in discrete 64-byte cache lines.
+A 300-byte sequence spans multiple cache lines, leading to frequent cache misses and severe memory bandwidth bottlenecks.
+In contrast, exactly eight 64-bit hashes fit perfectly into a single cache line.
+As `fxhash` probes the internal hash set for collisions, it operates almost exclusively within the ultra-fast CPU cache (L1/L2), minimizing latency and maximizing throughput.
+
+Furthermore, `FastDedup` processes byte slices directly from the `needletail` @Needletail parser into the `xxh3` hasher without ever allocating the raw string to the heap.
+This zero-allocation pipeline completely bypasses system-level memory allocation (`malloc`) overheads, ensuring that the execution time is strictly bound by disk I/O rather than RAM latency.
+
+== : The Mathematics of Dynamic Hashing
+#v(1em)
+
+While `FDedup` defaults to a highly efficient 64-bit hashing strategy, it dynamically assesses the risk of hash collisions to guarantee data integrity. The probability $p$ of a hash collision is calculated using the formula:
+$ p = x^2 / (2 * 2^64) $
+
+Where $x$ represents the estimated number of sequences.
+At the default threshold of $0.01$, it requires approximately $0.19 * 10^9$ sequences to reach a 1‰ collision risk with 64-bit hashing.
+If the estimated dataset size pushes the collision probability beyond the user-defined threshold, `FDedup` automatically scales to 128-bit hashing, effectively nullifying the risk (requiring $0.28 * 10^17$ sequences for the same probability).
+
+== : Memory Management and Parsing Optimization
+#v(1em)
+
+To deliver on its claim of memory efficiency, `FDedup` employs a pre-allocation strategy by estimation through the file size.
+Upon initialization, the `estimate_sequence_capacity` function predicts the total number of sequences by evaluating the input file size, dividing by 80 bytes for compressed (`.gz`) files and 350 bytes for uncompressed files.
+This estimation allows the underlying `FxHashSet` to be pre-allocated to the exact required capacity, actively preventing computationally expensive RAM reallocations during runtime.
+Furthermore, `FDedup` integrates the `needletail` to perform high-performance, zero-allocation sequence parsing, drastically reducing memory overhead.
+
+== : Paired-End Synchronization Logic
+#v(1em)
+
+Handling paired-end reads requires strict file synchronization without doubling the memory footprint.
+`FDedup` addresses this by generating a single, unified fingerprint for each read pair.
+This is achieved by hashing R1 and R2 independently, and then applying a bitwise XOR combined with a bit rotation to form the final hash.
+To actively prevent desynchronization, the internal module strictly validates the base identifiers of every read pair.
+If a discrepancy is detected between R1 and R2 headers, the tool safely aborts, protecting downstream tools from misaligned data.
+
+== : Crash Recovery and Best Practices
+
+While `FDedup` includes robust auto-recovery and file truncation mechanisms, these features are dependent on the output format.
+It is highly recommended to output files in uncompressed formats (such as `.fastq` or `.fasta`) during the deduplication step.
+If an uncompressed file is corrupted during a system crash, `FDedup` can automatically calculate the truncation point to the last valid byte and seamlessly resume.
+In addition to this, deduplication phases often happen in the beginning of pipelines and the output files are often used as input for subsequent steps, then rapidly discarded.
+It is more efficient to keep them uncompressed to avoid unnecessary decompression and recompression cycles, which can be time-consuming and resource-intensive.
+
+Conversely, if a `gzip` flux (`.gz`) becomes corrupted, it is rendered unreadable and cannot be safely truncated.
+In such events, users must overwrite the corrupted file and start from scratch.
 
 #page(flipped: true)[
-    == Architecture
+    == : Architecture
+    
     #figure(
       image("SE.mmd.svg", width: 110%),
       caption: [
