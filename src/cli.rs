@@ -56,7 +56,7 @@ pub struct Cli {
     pub dry_run: bool,
 
     /// Threshold for automatic hashing size selection (ignored if --hash is set)
-    #[arg(long, short = 't', default_value_t = 0.01)]
+    #[arg(long, short = 't', default_value_t = 0.001)]
     pub threshold: f64,
 
     /// Manually specify the hashing size (64 or 128 bits)
