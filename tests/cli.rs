@@ -188,7 +188,7 @@ fn test_fichier_entree_inexistant() {
         .arg("-1").arg("fichier_fantome.fastq")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Impossible de lire le fichier d'entrée"));
+        .stderr(predicate::str::contains("Failed to read input file"));
 }
 
 #[test]
@@ -215,8 +215,8 @@ fn test_fichier_entree_mauvais_format() {
         .assert()
         .failure()
         .stderr(
-            predicate::str::contains("Données de séquence invalides")
-                .or(predicate::str::contains("Impossible de lire le fichier"))
+            predicate::str::contains("Invalid sequence data")
+                .or(predicate::str::contains("Failed to read input file"))
         );
 }
 
@@ -242,7 +242,7 @@ fn test_fichier_sortie_gz_corrompu() {
         .arg("-o").arg(fichier_sortie_corrompu.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Erreur lors de l'ouverture du fichier de préchargement"));
+        .stderr(predicate::str::contains("Error opening preload file"));
 }
 
 // --------------------------------------------------------
@@ -258,8 +258,8 @@ fn test_taux_duplication_zero_pourcent() {
         .arg("-s").arg("-v")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fragments traités : 100"))
-        .stdout(predicate::str::contains("Doublons supprimés : 0.00%"));
+        .stdout(predicate::str::contains("Processed fragments: 100"))
+        .stdout(predicate::str::contains("Duplicates removed: 0.00%"));
 }
 
 #[test]
@@ -272,8 +272,8 @@ fn test_taux_duplication_9_09_pourcent() {
         .arg("-s").arg("-v")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fragments traités : 110"))
-        .stdout(predicate::str::contains("Doublons supprimés : 9.09%"));
+        .stdout(predicate::str::contains("Processed fragments: 110"))
+        .stdout(predicate::str::contains("Duplicates removed: 9.09%"));
 }
 
 #[test]
@@ -286,8 +286,8 @@ fn test_taux_duplication_50_pourcent() {
         .arg("-s").arg("-v")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fragments traités : 20"))
-        .stdout(predicate::str::contains("Doublons supprimés : 50.00%"));
+        .stdout(predicate::str::contains("Processed fragments: 20"))
+        .stdout(predicate::str::contains("Duplicates removed: 50.00%"));
 }
 
 #[test]
@@ -311,8 +311,8 @@ fn test_taux_duplication_entree_toutes_identiques() {
         .arg("-s").arg("-v")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Fragments traités : 10"))
-        .stdout(predicate::str::contains("Doublons supprimés : 90.00%"));
+        .stdout(predicate::str::contains("Processed fragments: 10"))
+        .stdout(predicate::str::contains("Duplicates removed: 90.00%"));
 }
 
 // --------------------------------------------------------
@@ -499,15 +499,15 @@ fn test_entree_fasta_sortie_fastq_non_supporte() {
         .arg("-o").arg(sortie.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Conversion FASTA → FASTQ non supportée"));
+        .stderr(predicate::str::contains("FASTA → FASTQ conversion not supported"));
 }
 
 // --------------------------------------------------------
-// TESTS SINGLE-END - COMPORTEMENT DE --forcer
+// SINGLE-END TESTS - --force BEHAVIOR
 // --------------------------------------------------------
 
 #[test]
-fn test_forcer_ecrase_le_fichier_existant() {
+fn test_force_overwrites_existing_file() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     // Premier passage : 10 séquences uniques
     let entree_1 = generer_fastq(&temp_dir, "entree_1.fastq", 10, 0);
@@ -521,12 +521,12 @@ fn test_forcer_ecrase_le_fichier_existant() {
 
     assert_eq!(compter_sequences_fastq(&fs::read_to_string(sortie.path()).unwrap()), 10);
 
-    // Second passage avec --forcer et un fichier plus petit : doit écraser, pas appendre
+    // Second pass with --force and a smaller file: must overwrite, not append
     let entree_2 = generer_fastq(&temp_dir, "entree_2.fastq", 4, 0);
     cmd()
         .arg("-1").arg(entree_2.path())
         .arg("-o").arg(sortie.path())
-        .arg("--forcer")
+        .arg("--force")
         .assert()
         .success();
 
@@ -534,16 +534,16 @@ fn test_forcer_ecrase_le_fichier_existant() {
     assert_eq!(
         compter_sequences_fastq(&contenu_final),
         4,
-        "--forcer doit écraser le fichier existant, pas y ajouter"
+        "--force must overwrite the existing file, not append to it"
     );
 }
 
 #[test]
-fn test_sans_forcer_reprend_depuis_la_sortie_existante() {
+fn test_without_force_resumes_from_existing_output() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     // Simule une reprise : la sortie contient déjà 5 séquences,
     // l'entrée contient les mêmes 5 séquences + 5 nouvelles.
-    // Sans --forcer, les 5 existantes doivent être considérées comme déjà traitées.
+    // Without --force, the 5 existing ones should be considered already processed.
     let entree_initiale = generer_fastq(&temp_dir, "entree_initiale.fastq", 5, 0);
     let sortie = temp_dir.child("sortie_reprise.fastq");
 
@@ -587,7 +587,7 @@ fn test_hachage_64_bits_explicite() {
         .arg("-v")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Hachage 64 bits"));
+        .stdout(predicate::str::contains("64-bit Hash"));
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
     assert_eq!(compter_sequences_fastq(&contenu), 20);
@@ -606,7 +606,7 @@ fn test_hachage_128_bits_explicite() {
         .arg("-v")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Hachage 128 bits"));
+        .stdout(predicate::str::contains("128-bit Hash"));
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
     assert_eq!(compter_sequences_fastq(&contenu), 20);
@@ -692,7 +692,7 @@ fn test_deduplication_preservee_apres_compression() {
     cmd()
         .arg("-1").arg(entree.path())
         .arg("-o").arg(sortie_non_gz.path())
-        .arg("--forcer")
+        .arg("--force")
         .assert()
         .success();
 
@@ -719,7 +719,7 @@ fn test_paire_erreur_sortie_r2_manquante() {
         .arg("-o").arg(sortie_r1.path()) // utilise le temp_dir, pas le répertoire courant
         .assert()
         .failure()
-        .stderr(predicate::str::contains("L'argument --sortie-r2 (-p) est obligatoire"));
+        .stderr(predicate::str::contains("The --output-r2 (-p) argument is required"));
 }
 
 #[test]
@@ -740,7 +740,7 @@ fn test_paire_desynchronisee_bloquee() {
         .arg("-s")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Désynchronisation critique détectée"));
+        .stderr(predicate::str::contains("Critical desynchronization detected"));
 }
 
 #[test]
@@ -755,7 +755,7 @@ fn test_paire_formats_incoherents() {
         .arg("-p").arg(temp_dir.child("sortie_R2.fastq").path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("doivent avoir le même format"));
+        .stderr(predicate::str::contains("must have the same format"));
 }
 
 // --------------------------------------------------------
@@ -776,8 +776,8 @@ fn test_paire_taux_duplication_33_pourcent() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Paired-End"))
-        .stdout(predicate::str::contains("Fragments traités : 150"))
-        .stdout(predicate::str::contains("Doublons supprimés : 33.33%"));
+        .stdout(predicate::str::contains("Processed fragments: 150"))
+        .stdout(predicate::str::contains("Duplicates removed: 33.33%"));
 }
 
 // --------------------------------------------------------
