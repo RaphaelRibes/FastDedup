@@ -43,5 +43,4 @@ description = "Run a demonstration of FDedup"
 cmd = "./demo.sh"
 
 [environments]
-rapport = ["rapport"]
 profile = ["profile"]
