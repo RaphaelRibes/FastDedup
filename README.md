@@ -21,18 +21,23 @@ If you want to build it from source, you need to have the following dependencies
 - [Pixi](https://pixi.sh) (Optional, for running workflows and benchmarks)
 
 ## Installation
+
 ### From pre-compiled binaries or container images
 You can download the latest pre-compiled binaries from the [releases page](https://github.com/RaphaelRibes/FastDedup/releases)
+
+### From bioconda
+The recommended way to install FastDedup is with pixi through bioconda:
+
+```bash
+pixi add bioconda::fdedup
+```
+
 ### From Cargo
 You can install FastDedup directly from Cargo:
 
 ```bash
 cargo install fastdedup
 ```
-
-### From bioconda
-*bioconda aprobation in progress*
-
 
 ## Usage
 
