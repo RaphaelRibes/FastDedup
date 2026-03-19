@@ -1,6 +1,6 @@
 [package]
 name = "fastdedup"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Raphaël Ribes", "Céline Mandier"]
@@ -23,6 +23,10 @@ exclude = [
     "demo.sh",
     ".github/"
 ]
+
+[[bin]]
+name = "fdedup"
+path = "src/main.rs"
 
 [dependencies]
 xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
