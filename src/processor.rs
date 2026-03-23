@@ -17,6 +17,7 @@ pub(crate) fn execute_deduplication<T: SequenceHasher + 'static>(
     force: bool,
     verbose: bool,
     dry_run: bool,
+    compression_level: u32,
     estimated_capacity: usize,
 ) -> Result<(usize, usize)> {
     let mut verifier = HashVerifier::<T>::new(estimated_capacity);
@@ -64,7 +65,7 @@ pub(crate) fn execute_deduplication<T: SequenceHasher + 'static>(
     }
 
     // --- WRITER PREPARATION ---
-    let (writer, output_format) = prepare_writer(output_path_bound, force)?;
+    let (writer, output_format) = prepare_writer(output_path_bound, force, compression_level)?;
     let mut buffered_writer = BufWriter::with_capacity(128 * 1024, writer);
 
     // --- READING AND PARSING ---
@@ -128,6 +129,7 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
     force: bool,
     verbose: bool,
     dry_run: bool,
+    compression_level: u32,
     estimated_capacity: usize,
 ) -> Result<(usize, usize)> {
     let mut verifier = HashVerifier::<T>::new(estimated_capacity);
@@ -204,8 +206,8 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
     }
 
     // --- WRITER PREPARATION ---
-    let (writer_r1, output_format_r1) = prepare_writer(path_r1_bound, force)?;
-    let (writer_r2, output_format_r2) = prepare_writer(path_r2_bound, force)?;
+    let (writer_r1, output_format_r1) = prepare_writer(path_r1_bound, force, compression_level)?;
+    let (writer_r2, output_format_r2) = prepare_writer(path_r2_bound, force, compression_level)?;
 
     // Both files must have the same format
     if output_format_r1 != output_format_r2 {

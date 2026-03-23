@@ -1,9 +1,12 @@
 [package]
 name = "fastdedup"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["Raphaël Ribes", "Céline Mandier"]
+authors = [
+    "Raphaël Ribes <raphael.ribes@etu.umontpellier.fr>",
+    "Céline Mandier <celine.mandier@umontpellier.fr>"
+]
 description = "A fast and memory-efficient FASTX PCR deduplication tool"
 readme = "README.md"
 license = "MIT"

@@ -20,6 +20,7 @@ fn dispatch(
     force: bool,
     verbose: bool,
     dry_run: bool,
+    compression_level: u32,
     hash_type: &HashType,
 ) -> Result<(usize, usize)> {
     match hash_type {
@@ -33,6 +34,7 @@ fn dispatch(
                 force,
                 verbose,
                 dry_run,
+                compression_level,
                 estimated_capacity,
             )
         }
@@ -46,6 +48,7 @@ fn dispatch(
                 force,
                 verbose,
                 dry_run,
+                compression_level,
                 estimated_capacity,
             )
         }
@@ -62,6 +65,7 @@ fn dispatch_paired(
     force: bool,
     verbose: bool,
     dry_run: bool,
+    compression_level: u32,
     hash_type: &HashType,
 ) -> Result<(usize, usize)> {
     match hash_type {
@@ -77,6 +81,7 @@ fn dispatch_paired(
                 force,
                 verbose,
                 dry_run,
+                compression_level,
                 estimated_capacity,
             )
         }
@@ -92,6 +97,7 @@ fn dispatch_paired(
                 force,
                 verbose,
                 dry_run,
+                compression_level,
                 estimated_capacity,
             )
         }
@@ -161,6 +167,7 @@ fn main() -> Result<()> {
             args.force,
             args.verbose,
             args.dry_run,
+            args.compression,
             &selected_hash_type,
         )?
     } else {
@@ -175,6 +182,7 @@ fn main() -> Result<()> {
             args.force,
             args.verbose,
             args.dry_run,
+            args.compression,
             &selected_hash_type,
         )?
     };

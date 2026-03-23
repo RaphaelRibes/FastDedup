@@ -51,7 +51,7 @@ pub fn get_hash_method(size: usize, threshold: f64) -> HashType {
 }
 
 /// Prepares a writer for the output file based on the format and whether it should be forced (overwritten) or appended.
-pub fn prepare_writer(path: &Path, force: bool) -> Result<(Box<dyn Write>, OutputFormat)> {
+pub fn prepare_writer(path: &Path, force: bool, compression_level: u32) -> Result<(Box<dyn Write>, OutputFormat)> {
     let format = OutputFormat::from_extension(path);
     let is_gz = OutputFormat::is_gz(path);
 
@@ -64,7 +64,7 @@ pub fn prepare_writer(path: &Path, force: bool) -> Result<(Box<dyn Write>, Outpu
     };
 
     let writer: Box<dyn Write> = if is_gz {
-        Box::new(GzEncoder::new(file, Compression::default()))
+        Box::new(GzEncoder::new(file, Compression::new(compression_level)))
     } else {
         Box::new(file)
     };

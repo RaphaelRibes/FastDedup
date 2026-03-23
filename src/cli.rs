@@ -62,6 +62,10 @@ pub struct Cli {
     /// Manually specify the hashing size (64 or 128 bits)
     #[arg(long, short = 'H')]
     pub hash: Option<HashMode>,
+
+    /// Set the GZIP compression level (1-9)
+    #[arg(long, short = 'c', default_value_t = 6, value_parser = clap::value_parser!(u32).range(1..=9))]
+    pub compression: u32,
 }
 
 /// The selected hash mode (64-bit or 128-bit)

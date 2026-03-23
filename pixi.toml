@@ -1,6 +1,6 @@
 [workspace]
 name = "FDedup"
-version = "1.0.0"
+version = "1.1.0"
 description = "A fast and memory-efficient FASTX PCR deduplication tool"
 authors = ["Raphaël Ribes", "Céline Mandier"]
 platforms = ["linux-64", "osx-64", "linux-aarch64", "osx-arm64"]
@@ -43,7 +43,7 @@ description = "Run a demonstration of FDedup"
 cmd = "./demo.sh"
 
 [tasks.mk_tarball]
-cmd = "cargo build --release && mv target/release/fdedup . && tar -czvf fdedup_1.0.0_linux_x86_64.tar.gz fdedup && rm fdedup"
+cmd = "cargo build --release && mv target/release/fdedup . && tar -czvf fdedup_$(grep -m 1 -oP '^version\\s*=\\s*\"\\K[^\"]+' pixi.toml)_linux_x86_64.tar.gz fdedup && rm fdedup_$(grep -m 1 -oP '^version\\s*=\\s*\"\\K[^\"]+' pixi.toml)"
 
 [environments]
 profile = ["profile"]
