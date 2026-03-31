@@ -1,15 +1,13 @@
 mod cli;
-mod hasher;
 mod processor;
-mod utils;
 
-use crate::hasher::HashType;
+use fastdedup::hasher::HashType;
+use fastdedup::utils::{estimate_sequence_capacity, get_hash_method, birthday_problem_square_approximation};
 use crate::processor::{execute_deduplication, execute_paired_deduplication};
-use crate::utils::estimate_sequence_capacity;
-use crate::utils::{get_hash_method, birthday_problem_square_approximation};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use cli::{Cli, HashMode};
+use cli::Cli;
+use std::path::Path;
 use std::time::Instant;
 
 /// Dispatches single-end deduplication based on the selected hash type.
@@ -22,6 +20,7 @@ fn dispatch(
     dry_run: bool,
     compression_level: u32,
     hash_type: &HashType,
+    read_length: usize,
 ) -> Result<(usize, usize)> {
     match hash_type {
         HashType::XXH3_64 => {
@@ -36,6 +35,7 @@ fn dispatch(
                 dry_run,
                 compression_level,
                 estimated_capacity,
+                read_length,
             )
         }
         HashType::XXH3_128 => {
@@ -50,6 +50,7 @@ fn dispatch(
                 dry_run,
                 compression_level,
                 estimated_capacity,
+                read_length,
             )
         }
     }
@@ -67,6 +68,7 @@ fn dispatch_paired(
     dry_run: bool,
     compression_level: u32,
     hash_type: &HashType,
+    read_length: usize,
 ) -> Result<(usize, usize)> {
     match hash_type {
         HashType::XXH3_64 => {
@@ -83,6 +85,7 @@ fn dispatch_paired(
                 dry_run,
                 compression_level,
                 estimated_capacity,
+                read_length,
             )
         }
         HashType::XXH3_128 => {
@@ -99,6 +102,7 @@ fn dispatch_paired(
                 dry_run,
                 compression_level,
                 estimated_capacity,
+                read_length,
             )
         }
     }
@@ -107,7 +111,19 @@ fn dispatch_paired(
 fn main() -> Result<()> {
     let args = Cli::parse();
 
-    if args.hash.is_some() && args.threshold != 0.01 {
+    // --- INPUT VALIDATION ---
+
+    if !Path::new(&args.input).exists() {
+        bail!("Input file not found: {}", args.input);
+    }
+
+    if let Some(ref r2) = args.input_r2 {
+        if !Path::new(r2).exists() {
+            bail!("R2 input file not found: {}", r2);
+        }
+    }
+
+    if args.hash.is_some() && args.threshold != 0.001 {
         eprintln!(
             "Warning: --hash specifies a hash size, so the automatic selection threshold ({}) is ignored.",
             args.threshold
@@ -117,24 +133,22 @@ fn main() -> Result<()> {
     if args.verbose {
         println!("Primary input file (R1): {}", args.input);
         println!("Primary output file (R1): {}", args.output);
+        println!("Expected read length: {} bp", args.read_length);
     }
 
-    // Estimate capacity based only on R1.
-    // In Paired-End, 1 pair = 1 fragment = 1 hash, so R1 size is sufficient!
-    let cap_input = estimate_sequence_capacity(&args.input)
-        .context("Input file not found or inaccessible")?;
+    let cap_input = estimate_sequence_capacity(&args.input, args.read_length)
+        .context("Failed to estimate input file capacity")?;
 
     let cap_output = if args.force {
         0
     } else {
-        estimate_sequence_capacity(&args.output).unwrap_or(0)
+        estimate_sequence_capacity(&args.output, args.read_length).unwrap_or(0)
     };
 
     let total_capacity = cap_input + cap_output;
 
     let selected_hash_type = match args.hash {
-        Some(HashMode::Bit64) => HashType::XXH3_64,
-        Some(HashMode::Bit128) => HashType::XXH3_128,
+        Some(mode) => HashType::from(mode),
         None => get_hash_method(total_capacity, args.threshold),
     };
 
@@ -144,13 +158,10 @@ fn main() -> Result<()> {
 
     let start = Instant::now();
 
-    // Routing Logic: Single-End vs Paired-End
     let (processed, duplicates) = if let Some(input_r2) = &args.input_r2 {
-
-        // Ensure the user provided an output file for R2
-        let output_r2 = args.output_r2.as_ref().expect(
-            "Critical Error: The --output-r2 (-p) argument is required when --input-r2 (-2) is used."
-        );
+        let output_r2 = args.output_r2.as_ref().context(
+            "The --output-r2 (-p) argument is required when --input-r2 (-2) is used."
+        )?;
 
         if args.verbose {
             println!("Secondary input file (R2): {}", input_r2);
@@ -169,6 +180,7 @@ fn main() -> Result<()> {
             args.dry_run,
             args.compression,
             &selected_hash_type,
+            args.read_length,
         )?
     } else {
         if args.verbose {
@@ -184,6 +196,7 @@ fn main() -> Result<()> {
             args.dry_run,
             args.compression,
             &selected_hash_type,
+            args.read_length,
         )?
     };
 
@@ -199,7 +212,7 @@ fn main() -> Result<()> {
         );
         println!(
             "Estimated collisions: {:.2e}%",
-            birthday_problem_square_approximation(processed, &selected_hash_type)*100.0
+            birthday_problem_square_approximation(processed, &selected_hash_type) * 100.0
         );
         println!("Total execution time: {:.2?}", start.elapsed());
     }

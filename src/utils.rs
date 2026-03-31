@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use needletail::parse_fastx_file;
 use std::io::Write;
 use std::path::Path;
@@ -7,6 +7,10 @@ use std::fs::{File, OpenOptions};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use crate::hasher::{SequenceHasher, HashType, HashVerifier};
+
+/// Maximum number of entries to pre-allocate in the hash set.
+/// Prevents multi-GB allocations from inaccurate file-size estimates.
+const MAX_PREALLOC_ENTRIES: usize = 500_000_000; // 500M
 
 /// Supported output formats for sequences.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -20,13 +24,11 @@ impl OutputFormat {
     pub fn from_extension(path: &Path) -> Self {
         let path_str = path.to_string_lossy().to_lowercase();
 
-        // Check if it's compressed first
         let without_gz = path_str.strip_suffix(".gz").unwrap_or(&path_str);
 
         if without_gz.ends_with(".fasta") || without_gz.ends_with(".fa") || without_gz.ends_with(".fna") {
             OutputFormat::Fasta
         } else {
-            // Default to FASTQ
             OutputFormat::Fastq
         }
     }
@@ -50,12 +52,61 @@ pub fn get_hash_method(size: usize, threshold: f64) -> HashType {
     }
 }
 
-/// Prepares a writer for the output file based on the format and whether it should be forced (overwritten) or appended.
+/// Computes the write buffer size from the expected read length.
+///
+/// A FASTQ record is roughly:
+///   - 1 ID line:      ~40 bytes (conservative estimate)
+///   - 1 sequence:     read_length bytes
+///   - 1 '+' line:     2 bytes
+///   - 1 quality line: read_length bytes
+///   → total ≈ 2 * read_length + 42 bytes
+///
+/// We target holding ~512 records per flush as a heuristic — large enough
+/// to amortize syscall and gzip overhead, small enough to avoid memory pressure
+/// when many instances run in parallel on an HPC node.
+/// The result is clamped between 64KB (floor, never regress below OS page granularity)
+/// and 64MB (ceiling, avoids OOM on ultra-long reads at high parallelism).
+pub fn compute_write_buffer_size(read_length: usize) -> usize {
+    let bytes_per_record = 2 * read_length + 42;
+    let target = bytes_per_record * 512;
+    target.clamp(64 * 1024, 64 * 1024 * 1024)
+}
+
+/// Computes the bytes-per-read divisor for capacity pre-allocation.
+///
+/// Same record size formula as above, with a compression factor of ~4x for gzip.
+/// Clamped to a minimum of 1 to prevent division by zero.
+pub fn compute_bytes_per_read(read_length: usize, is_gz: bool) -> usize {
+    let plain = (2 * read_length + 42).max(1);
+    if is_gz {
+        (plain / 4).max(1) // ~3.5–4x compression on DNA is typical
+    } else {
+        plain
+    }
+}
+
+/// Prepares a writer for the output file based on the format and whether it should
+/// be forced (overwritten) or appended.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Append mode is requested on a `.gz` file (multi-member gzip is unreliable
+///   for downstream bioinformatics tools).
+/// - The file cannot be opened or created.
 pub fn prepare_writer(path: &Path, force: bool, compression_level: u32) -> Result<(Box<dyn Write>, OutputFormat)> {
     let format = OutputFormat::from_extension(path);
     let is_gz = OutputFormat::is_gz(path);
 
     let file = if path.exists() && !force {
+        if is_gz {
+            bail!(
+                "Cannot append to gzipped output {:?}. Multi-member gzip is unreliable for \
+                 downstream tools. Use --force to overwrite, or use an uncompressed output \
+                 format for incremental/resumable runs.",
+                path
+            );
+        }
         OpenOptions::new().append(true).open(path)
             .with_context(|| format!("Failed to open file in append mode: {:?}", path))?
     } else {
@@ -73,23 +124,41 @@ pub fn prepare_writer(path: &Path, force: bool, compression_level: u32) -> Resul
 }
 
 /// Estimates the number of sequences in a file to pre-allocate memory.
-pub fn estimate_sequence_capacity<P: AsRef<Path>>(path: P) -> Result<usize> {
+/// The result is capped at `MAX_PREALLOC_ENTRIES` to avoid over-allocation.
+pub fn estimate_sequence_capacity<P: AsRef<Path>>(
+    path: P,
+    read_length: usize,
+) -> Result<usize> {
     let path_ref = path.as_ref();
     if !path_ref.exists() {
         return Ok(0);
     }
 
-    let metadata = fs::metadata(path_ref)?;
-    let file_size_bytes = metadata.len();
-    let is_gz = path_ref.extension().and_then(|s| s.to_str()) == Some("gz");
+    let file_size_bytes = fs::metadata(path_ref)?.len() as usize;
+    let is_gz = OutputFormat::is_gz(path_ref);
+    let divisor = compute_bytes_per_read(read_length, is_gz);
 
-    let estimated_capacity = if is_gz {
-        (file_size_bytes / 80) as usize
-    } else {
-        (file_size_bytes / 350) as usize
-    };
+    Ok((file_size_bytes / divisor).clamp(1, MAX_PREALLOC_ENTRIES))
+}
 
-    Ok(estimated_capacity)
+/// Default capacity returned when automatic estimation fails or the file
+/// does not exist.  Matches the constant used in `UniqueFastxStream::new`.
+const DEFAULT_CAPACITY: usize = 65_536;
+
+/// Default assumed read length (Illumina short-read) used when the caller
+/// does not supply one.
+const DEFAULT_READ_LENGTH: usize = 150;
+
+/// Estimates hash-set capacity from a file path alone, with no required
+/// parameters.  This is the "fire-and-forget" version of
+/// [`estimate_sequence_capacity`]: it assumes a 150 bp read length and
+/// silently falls back to a small default if the file is missing, empty,
+/// or its metadata cannot be read.
+///
+/// Intended for the library API (`UniqueFastxStream::new`) where the
+/// caller may not know — or care about — the dataset size up front.
+pub fn auto_estimate_capacity(path: &str) -> usize {
+    estimate_sequence_capacity(path, DEFAULT_READ_LENGTH).unwrap_or(DEFAULT_CAPACITY)
 }
 
 /// Preloads existing hashes into memory from an existing output file (Single-End).
@@ -133,7 +202,8 @@ pub fn preload_existing_hashes<T: SequenceHasher>(
     Ok((count, valid_bytes.0))
 }
 
-/// Preloads existing hashes into memory from existing output files (Paired-End) and computes valid byte sizes to synchronize truncation.
+/// Preloads existing hashes into memory from existing output files (Paired-End)
+/// and computes valid byte sizes to synchronize truncation.
 pub fn preload_existing_paired_hashes<T: SequenceHasher>(
     path_r1: &str,
     path_r2: &str,
@@ -181,7 +251,9 @@ pub fn preload_existing_paired_hashes<T: SequenceHasher>(
     Ok((count, valid_bytes_r1.0, valid_bytes_r2.0))
 }
 
-struct ByteCounter(u64);
+/// A no-op writer that counts bytes written, used to compute valid byte offsets
+/// without actually performing I/O.
+pub(crate) struct ByteCounter(pub u64);
 
 impl Write for ByteCounter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -194,6 +266,29 @@ impl Write for ByteCounter {
     }
 }
 
+/// Writes a single FASTA record using raw byte.
+#[inline]
+pub fn write_fasta_record(writer: &mut impl Write, id: &[u8], seq: &[u8]) -> Result<()> {
+    writer.write_all(b">").context("Error writing FASTA '>' prefix")?;
+    writer.write_all(id).context("Error writing FASTA ID")?;
+    writer.write_all(b"\n").context("Error writing FASTA ID newline")?;
+    writer.write_all(seq).context("Error writing FASTA sequence")?;
+    writer.write_all(b"\n").context("Error writing FASTA sequence newline")?;
+    Ok(())
+}
+
+/// Validates that the output format is compatible with the input data.
+/// FASTA input cannot be written as FASTQ (no quality scores).
+pub fn validate_format_compatibility(has_quality: bool, output_format: OutputFormat) -> Result<()> {
+    if !has_quality && output_format == OutputFormat::Fastq {
+        bail!(
+            "FASTA → FASTQ conversion not supported: the input file does not contain \
+             quality scores. Use a .fasta/.fa/.fna extension for output."
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,115 +296,156 @@ mod tests {
 
     // --- birthday_problem_square_approximation ---
 
-    /// À 2^32 séquences avec un hash 64-bit, la probabilité de collision
-    /// doit être exactement 0.5 (valeur analytique connue).
-    /// Formule : (2^32)^2 / 2^(64+1) = 2^64 / 2^65 = 0.5
     #[test]
-    fn test_birthday_64bit_a_2_puissance_32() {
-        let n = (u32::MAX as usize) + 1; // 2^32
+    fn test_birthday_64bit_at_2_pow_32() {
+        let n = (u32::MAX as usize) + 1;
         let prob = birthday_problem_square_approximation(n, &HashType::XXH3_64);
         assert!(
             (prob - 0.5).abs() < 1e-9,
-            "Probabilité attendue 0.5, obtenue {:.12}",
+            "Expected probability 0.5, got {:.12}",
             prob
         );
     }
 
-    /// À 2^32 séquences avec un hash 128-bit, la probabilité doit être
-    /// exactement 2^64 / 2^129 = 2^-65 ≈ 2.71e-20.
     #[test]
-    fn test_birthday_128bit_a_2_puissance_32() {
-        let n = (u32::MAX as usize) + 1; // 2^32
+    fn test_birthday_128bit_at_2_pow_32() {
+        let n = (u32::MAX as usize) + 1;
         let prob = birthday_problem_square_approximation(n, &HashType::XXH3_128);
         let expected = (n as f64).powi(2) / 2.0_f64.powi(129);
         assert!(
             (prob - expected).abs() < 1e-30,
-            "Probabilité attendue {:.3e}, obtenue {:.3e}",
+            "Expected probability {:.3e}, got {:.3e}",
             expected,
             prob
         );
     }
 
-    /// À 0 séquences, la probabilité de collision doit être 0.
     #[test]
     fn test_birthday_zero_sequences() {
         let prob = birthday_problem_square_approximation(0, &HashType::XXH3_64);
         assert_eq!(prob, 0.0);
     }
 
-    /// À 1 séquence, la probabilité de collision doit être 1 / 2^65 ≈ 2.71e-20.
     #[test]
-    fn test_birthday_une_sequence() {
+    fn test_birthday_one_sequence() {
         let prob = birthday_problem_square_approximation(1, &HashType::XXH3_64);
         assert!(prob > 0.0 && prob < 1e-15);
     }
 
     // --- get_hash_method ---
 
-    /// Une taille très grande (> seuil) avec le threshold par défaut doit
-    /// sélectionner XXH3_128.
     #[test]
-    fn test_get_hash_method_grand_dataset_selectionne_128() {
-        // seuil pour threshold=0.001 : sqrt(2 * 2^64 * 0.001) ≈ 192_059_795
-        let grande_taille = 200_000_000_usize;
-        let methode = get_hash_method(grande_taille, 0.001);
+    fn test_get_hash_method_large_dataset_selects_128() {
+        let large_size = 200_000_000_usize;
+        let method = get_hash_method(large_size, 0.001);
         assert!(
-            matches!(methode, HashType::XXH3_128),
-            "Un dataset de {} séquences doit utiliser XXH3_128", grande_taille
+            matches!(method, HashType::XXH3_128),
+            "A dataset of {} sequences should use XXH3_128", large_size
         );
     }
 
-    /// Une taille petite (< seuil) avec le threshold par défaut doit
-    /// sélectionner XXH3_64.
     #[test]
-    fn test_get_hash_method_petit_dataset_selectionne_64() {
-        let petite_taille = 1_000_usize;
-        let methode = get_hash_method(petite_taille, 0.001);
+    fn test_get_hash_method_small_dataset_selects_64() {
+        let small_size = 1_000_usize;
+        let method = get_hash_method(small_size, 0.001);
         assert!(
-            matches!(methode, HashType::XXH3_64),
-            "Un dataset de {} séquences doit utiliser XXH3_64", petite_taille
+            matches!(method, HashType::XXH3_64),
+            "A dataset of {} sequences should use XXH3_64", small_size
         );
     }
 
-    /// Un threshold de 0 (collisions interdites) doit toujours sélectionner
-    /// XXH3_128, quelle que soit la taille.
     #[test]
-    fn test_get_hash_method_threshold_zero_force_128() {
-        // sqrt(0) = 0 < toute taille > 0
-        let methode = get_hash_method(1, 0.0);
+    fn test_get_hash_method_threshold_zero_forces_128() {
+        let method = get_hash_method(1, 0.0);
         assert!(
-            matches!(methode, HashType::XXH3_128),
-            "Un threshold de 0 doit toujours sélectionner XXH3_128"
+            matches!(method, HashType::XXH3_128),
+            "A threshold of 0 should always select XXH3_128"
         );
     }
 
-    /// Un threshold de 1.0 (toutes les collisions acceptées) doit toujours
-    /// sélectionner XXH3_64 pour des tailles pratiques (< 6 milliards).
     #[test]
-    fn test_get_hash_method_threshold_un_force_64() {
-        // seuil pour threshold=1.0 : sqrt(2 * 2^64) ≈ 6_074_000_999
-        let methode = get_hash_method(1_000_000, 1.0);
+    fn test_get_hash_method_threshold_one_forces_64() {
+        let method = get_hash_method(1_000_000, 1.0);
         assert!(
-            matches!(methode, HashType::XXH3_64),
-            "Un threshold de 1.0 doit sélectionner XXH3_64 pour un dataset de taille normale"
+            matches!(method, HashType::XXH3_64),
+            "A threshold of 1.0 should select XXH3_64 for a normal-sized dataset"
         );
     }
 
-    /// Vérifie le point de basculement exact : juste en dessous du seuil → 64-bit,
-    /// juste au-dessus → 128-bit.
     #[test]
-    fn test_get_hash_method_point_de_basculement() {
-        // seuil exact pour threshold=0.5 : sqrt(2 * 2^64 * 0.5) = sqrt(2^64) = 2^32 = 4_294_967_296
-        let seuil = 4_294_967_296_usize; // 2^32
-        let juste_en_dessous = get_hash_method(seuil - 1, 0.5);
-        let juste_au_dessus = get_hash_method(seuil + 1, 0.5);
+    fn test_get_hash_method_tipping_point() {
+        let boundary = 4_294_967_296_usize;
+        let just_below = get_hash_method(boundary - 1, 0.5);
+        let just_above = get_hash_method(boundary + 1, 0.5);
         assert!(
-            matches!(juste_en_dessous, HashType::XXH3_64),
-            "Juste en dessous du seuil doit être XXH3_64"
+            matches!(just_below, HashType::XXH3_64),
+            "Just below the boundary should be XXH3_64"
         );
         assert!(
-            matches!(juste_au_dessus, HashType::XXH3_128),
-            "Juste au-dessus du seuil doit être XXH3_128"
+            matches!(just_above, HashType::XXH3_128),
+            "Just above the boundary should be XXH3_128"
         );
+    }
+
+    // --- compute_write_buffer_size ---
+
+    #[test]
+    fn test_buffer_size_illumina_150bp() {
+        let buf = compute_write_buffer_size(150);
+        assert_eq!(buf, 175_104);
+        assert!(buf >= 64 * 1024);
+        assert!(buf <= 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_buffer_size_floor_clamping() {
+        let buf = compute_write_buffer_size(1);
+        assert_eq!(buf, 64 * 1024);
+    }
+
+    #[test]
+    fn test_buffer_size_ceiling_clamping() {
+        let buf = compute_write_buffer_size(100_000);
+        assert_eq!(buf, 64 * 1024 * 1024);
+    }
+
+    // --- compute_bytes_per_read ---
+
+    #[test]
+    fn test_bytes_per_read_plain_150bp() {
+        assert_eq!(compute_bytes_per_read(150, false), 342);
+    }
+
+    #[test]
+    fn test_bytes_per_read_gz_150bp() {
+        assert_eq!(compute_bytes_per_read(150, true), 85);
+    }
+
+    #[test]
+    fn test_bytes_per_read_zero_length_no_panic() {
+        assert!(compute_bytes_per_read(0, false) >= 1);
+        assert!(compute_bytes_per_read(0, true) >= 1);
+    }
+
+    // --- OutputFormat ---
+
+    #[test]
+    fn test_output_format_fastq_default() {
+        assert_eq!(OutputFormat::from_extension(Path::new("out.fastq")), OutputFormat::Fastq);
+        assert_eq!(OutputFormat::from_extension(Path::new("out.fq.gz")), OutputFormat::Fastq);
+        assert_eq!(OutputFormat::from_extension(Path::new("out.unknown")), OutputFormat::Fastq);
+    }
+
+    #[test]
+    fn test_output_format_fasta() {
+        assert_eq!(OutputFormat::from_extension(Path::new("out.fasta")), OutputFormat::Fasta);
+        assert_eq!(OutputFormat::from_extension(Path::new("out.fa")), OutputFormat::Fasta);
+        assert_eq!(OutputFormat::from_extension(Path::new("out.fna.gz")), OutputFormat::Fasta);
+    }
+
+    #[test]
+    fn test_is_gz() {
+        assert!(OutputFormat::is_gz(Path::new("file.fastq.gz")));
+        assert!(!OutputFormat::is_gz(Path::new("file.fastq")));
     }
 }
