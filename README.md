@@ -12,8 +12,8 @@ Paper in preparation, you can check it [here](https://gitlab.etu.umontpellier.fr
 ## Features
 
 - **Fast & Memory Efficient**: Uses zero-allocation sequence parsing and a non-cryptographic high-speed hashing cache, which automatically scales based on the estimated input file size.
-- **Supports Compressed Formats**: Transparently reads and writes both uncompressed and GZIP compressed (`.gz`) FASTQ/FASTA files.
-- **Incremental Deduplication & Auto-Recovery**: By default, FDedup appends new sequences to an existing output file. It safely pre-loads existing hashes to prevent duplicates. If an uncompressed output file is corrupted due to a previous crash, FDedup automatically truncates it to the last valid sequence and resumes safely.
+- **Supports Compressed Formats**: Transparently reads both uncompressed and GZIP compressed (`.gz`) FASTQ/FASTA files. Writes to both uncompressed and GZIP compressed formats.
+- **Incremental Deduplication & Auto-Recovery**: By default, FDedup appends new sequences to an existing uncompressed output file. It safely pre-loads existing hashes to prevent duplicates. If an uncompressed output file is corrupted due to a previous crash, FDedup automatically truncates it to the last valid sequence and resumes safely.
 
 ## Requirements
 If you want to build it from source, you need to have the following dependencies installed:
@@ -39,7 +39,7 @@ You can install FastDedup directly from Cargo:
 cargo install fastdedup
 ```
 
-## Usage
+## CLI Usage
 
 ```bash
 fdedup [OPTIONS] --input <INPUT>
@@ -52,13 +52,15 @@ fdedup [OPTIONS] --input <INPUT>
 - `-f, --force`: Overwrite the output file if it exists (instead of pre-loading hashes and appending).
 - `-v, --verbose`: Print processing stats, such as execution time, number of sequences, and duplication rates.
 - `-s, --dry-run`: Calculate duplication rate without creating an output file.
-- `-t, --threshold <THRESHOLD>`: Threshold for automatic hash size selection$^1$ (default: 0.01).
+- `-t, --threshold <THRESHOLD>`: Threshold for automatic hash size selection$^1$ (default: 0.001).
 - `-H, --hash <HASH>`: Manually specify hash size (64 or 128 bits).
+- `-c, --compression <LEVEL>`: GZIP compression level, 1–9 (default: 6).
+- `-P, --read-length <LENGTH>`: Expected read length in base pairs, used to tune I/O buffers (default: 150).
 
-1: The probability $p$ of collision is calculated as $p= \frac{x^2}{2*2^{64}}$ where $x$ is the estimated number of hashes. 
+1: The probability $p$ of collision is calculated as $p= \frac{x^2}{2 \cdot 2^{64}}$ where $x$ is the estimated number of hashes.
 If the probability is higher than the specified threshold, FDedup will automatically switch to 128-bit hashing to nullify the risk of collisions.
 
-> Note: you need $\sqrt{2+2^{64}*10^{-3}} \approx 0.19*10^9$ sequences to have a 1‰ chance of collision with 64-bit hashing, and $0.28*10^{17}$ sequences to have the same chance with 128-bit hashing. 
+> Note: you need $\sqrt{2 \cdot 2^{64} \cdot 10^{-3}} \approx 0.19 \times 10^9$ sequences to have a 1‰ chance of collision with 64-bit hashing, and $0.28 \times 10^{17}$ sequences to have the same chance with 128-bit hashing.
 
 ### Run it from Cargo
 
@@ -110,9 +112,75 @@ pixi containerize
 ## Recommendations
 
 If you are using FDedup in a pre-processing step, we recommend you to not export your file to a `.gz` format.
-If there is any crash, FDedup cannot restart from a compressed file, and you will lose all the progress.
-It is because a corrupted gzipped flux will make the file unreadable, and you will have to start from scratch using `--force`.
+Incremental/resumable deduplication, only works with uncompressed output files.
+If you output to a compressed format, FDedup requires `--force` to restart from scratch on any subsequent run.
 However, if you output to an uncompressed format, FDedup will automatically detect any crash-induced corruption, safely truncate the file to the last valid sequence, and seamlessly resume deduplication.
+
+## Library Usage
+
+FastDedup can also be used as a Rust library in your own projects.
+
+### Add the dependency
+
+```bash
+cargo add fastdedup --no-default-features
+```
+
+The `--no-default-features` flag avoids pulling in `clap` and other CLI-only dependencies.
+
+### Quick start
+
+The API mirrors needletail's `parse_fastx_file` — just swap it for `parse_uniq_fastx_file` and only unique sequences are yielded:
+
+```rust
+use fastdedup::parse_uniq_fastx_file;
+use anyhow::Result;
+use std::io::Write;
+
+fn main() -> Result<()> {
+    // Capacity is auto-estimated from the file size
+    let mut reader = parse_uniq_fastx_file::<u64>("reads.fastq");
+
+    let mut writer = std::fs::File::create("unique.fastq")?;
+
+    reader.for_each_unique(|record| {
+        record.write(&mut writer, None)?;
+        Ok(())
+    })?;
+
+    let (processed, duplicates) = reader.stats();
+    println!("{processed} reads, {duplicates} duplicates removed");
+    Ok(())
+}
+```
+
+### With a capacity hint
+
+If you know (or can estimate) the number of sequences, pre-allocating avoids rehashing:
+
+```rust
+use fastdedup::parse_uniq_fastx_file_with_capacity;
+
+let mut reader = parse_uniq_fastx_file_with_capacity::<u64>("reads.fastq", 50_000_000);
+```
+
+Or equivalently via the struct constructor:
+
+```rust
+use fastdedup::UniqueFastxStream;
+
+let mut reader = UniqueFastxStream::<u64>::with_capacity("reads.fastq", 50_000_000);
+```
+
+### 128-bit hashing
+
+For very large datasets (recommended for dataset >190M sequences) where 64-bit collision probability matters, use `u128`:
+
+```rust
+use fastdedup::parse_uniq_fastx_file;
+
+let mut reader = parse_uniq_fastx_file::<u128>("large_dataset.fastq");
+```
 
 ## To-Do List
 
@@ -124,7 +192,7 @@ However, if you output to an uncompressed format, FDedup will automatically dete
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](Licence) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Author
 
