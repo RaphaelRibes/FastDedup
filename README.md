@@ -133,7 +133,7 @@ However, if you output to an uncompressed format, FDedup will automatically dete
 - [ ] Add **Multithreading** to parallelize sequence hashing and processing.
 - [ ] Support tracking sequence **abundances** (counts) instead of naive discarding.
 - [x] Add a possibility for exporting sequences as **FASTA**.
-- [ ] Improve error handling.
+- [x] Improve error handling.
 
 ## License
 
