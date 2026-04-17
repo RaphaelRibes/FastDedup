@@ -1,6 +1,7 @@
 ![Version](https://img.shields.io/badge/Version-1.2.0-blue)
 [![Crates.io](https://img.shields.io/crates/v/fastdedup?color=orange&label=cargo)](https://crates.io/crates/fastdedup)
 [![Conda Receipt](https://img.shields.io/badge/install%20with-bioconda-brightgreen)](https://anaconda.org/bioconda/fdedup)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19630793.svg)](https://doi.org/10.5281/zenodo.19630793)
 
 # FastDedup
 
