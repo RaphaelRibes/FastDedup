@@ -26,10 +26,6 @@ exclude = [
     ".github/"
 ]
 
-[lib]
-name = "fastdedup"
-path = "src/lib.rs"
-
 [[bin]]
 name = "fdedup"
 path = "src/main.rs"

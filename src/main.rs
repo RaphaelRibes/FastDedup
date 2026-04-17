@@ -1,9 +1,13 @@
 mod cli;
 mod processor;
+mod utils;
+mod hasher;
 
-use fastdedup::hasher::HashType;
-use fastdedup::utils::{estimate_sequence_capacity, get_hash_method, birthday_problem_square_approximation};
-use crate::processor::{execute_deduplication, execute_paired_deduplication};
+use crate::hasher::HashType;
+use crate::utils::{
+    birthday_problem_square_approximation, estimate_sequence_capacity, get_hash_method,
+};
+use crate::processor::{execute_deduplication, execute_paired_deduplication, DedupConfig};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cli::Cli;
@@ -14,44 +18,21 @@ use std::time::Instant;
 fn dispatch(
     input_path: &str,
     output_path: &str,
-    estimated_capacity: usize,
-    force: bool,
-    verbose: bool,
-    dry_run: bool,
-    compression_level: u32,
     hash_type: &HashType,
-    read_length: usize,
+    cfg: &DedupConfig,
 ) -> Result<(usize, usize)> {
     match hash_type {
         HashType::XXH3_64 => {
-            if verbose {
+            if cfg.verbose {
                 println!("Single-End Mode: 64-bit Hash");
             }
-            execute_deduplication::<u64>(
-                input_path,
-                output_path,
-                force,
-                verbose,
-                dry_run,
-                compression_level,
-                estimated_capacity,
-                read_length,
-            )
+            execute_deduplication::<u64>(input_path, output_path, cfg)
         }
         HashType::XXH3_128 => {
-            if verbose {
+            if cfg.verbose {
                 println!("Single-End Mode: 128-bit Hash");
             }
-            execute_deduplication::<u128>(
-                input_path,
-                output_path,
-                force,
-                verbose,
-                dry_run,
-                compression_level,
-                estimated_capacity,
-                read_length,
-            )
+            execute_deduplication::<u128>(input_path, output_path, cfg)
         }
     }
 }
@@ -62,48 +43,21 @@ fn dispatch_paired(
     input_r2: &str,
     output_r1: &str,
     output_r2: &str,
-    estimated_capacity: usize,
-    force: bool,
-    verbose: bool,
-    dry_run: bool,
-    compression_level: u32,
     hash_type: &HashType,
-    read_length: usize,
+    cfg: &DedupConfig,
 ) -> Result<(usize, usize)> {
     match hash_type {
         HashType::XXH3_64 => {
-            if verbose {
+            if cfg.verbose {
                 println!("Paired-End Mode: 64-bit Combined Hash");
             }
-            execute_paired_deduplication::<u64>(
-                input_r1,
-                input_r2,
-                output_r1,
-                output_r2,
-                force,
-                verbose,
-                dry_run,
-                compression_level,
-                estimated_capacity,
-                read_length,
-            )
+            execute_paired_deduplication::<u64>(input_r1, input_r2, output_r1, output_r2, cfg)
         }
         HashType::XXH3_128 => {
-            if verbose {
+            if cfg.verbose {
                 println!("Paired-End Mode: 128-bit Combined Hash");
             }
-            execute_paired_deduplication::<u128>(
-                input_r1,
-                input_r2,
-                output_r1,
-                output_r2,
-                force,
-                verbose,
-                dry_run,
-                compression_level,
-                estimated_capacity,
-                read_length,
-            )
+            execute_paired_deduplication::<u128>(input_r1, input_r2, output_r1, output_r2, cfg)
         }
     }
 }
@@ -153,15 +107,28 @@ fn main() -> Result<()> {
     };
 
     if args.verbose {
-        println!("Total estimated hash table capacity: {} fragments", total_capacity);
+        println!(
+            "Total estimated hash table capacity: {} fragments",
+            total_capacity
+        );
     }
+
+    let cfg = DedupConfig {
+        force: args.force,
+        verbose: args.verbose,
+        dry_run: args.dry_run,
+        compression_level: args.compression,
+        estimated_capacity: total_capacity,
+        read_length: args.read_length,
+    };
 
     let start = Instant::now();
 
     let (processed, duplicates) = if let Some(input_r2) = &args.input_r2 {
-        let output_r2 = args.output_r2.as_ref().context(
-            "The --output-r2 (-p) argument is required when --input-r2 (-2) is used."
-        )?;
+        let output_r2 = args
+            .output_r2
+            .as_ref()
+            .context("The --output-r2 (-p) argument is required when --input-r2 (-2) is used.")?;
 
         if args.verbose {
             println!("Secondary input file (R2): {}", input_r2);
@@ -174,30 +141,15 @@ fn main() -> Result<()> {
             input_r2,
             &args.output,
             output_r2,
-            total_capacity,
-            args.force,
-            args.verbose,
-            args.dry_run,
-            args.compression,
             &selected_hash_type,
-            args.read_length,
+            &cfg,
         )?
     } else {
         if args.verbose {
             println!("--- Starting Single-End Processing ---");
         }
 
-        dispatch(
-            &args.input,
-            &args.output,
-            total_capacity,
-            args.force,
-            args.verbose,
-            args.dry_run,
-            args.compression,
-            &selected_hash_type,
-            args.read_length,
-        )?
+        dispatch(&args.input, &args.output, &selected_hash_type, &cfg)?
     };
 
     if args.verbose {

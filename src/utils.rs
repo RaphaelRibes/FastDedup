@@ -59,13 +59,14 @@ pub fn get_hash_method(size: usize, threshold: f64) -> HashType {
 ///   - 1 sequence:     read_length bytes
 ///   - 1 '+' line:     2 bytes
 ///   - 1 quality line: read_length bytes
-///   → total ≈ 2 * read_length + 42 bytes
+///
+/// Total ≈ `2 * read_length + 42` bytes.
 ///
 /// We target holding ~512 records per flush as a heuristic — large enough
 /// to amortize syscall and gzip overhead, small enough to avoid memory pressure
 /// when many instances run in parallel on an HPC node.
-/// The result is clamped between 64KB (floor, never regress below OS page granularity)
-/// and 64MB (ceiling, avoids OOM on ultra-long reads at high parallelism).
+/// The result is clamped between 64 KB (floor, never regress below OS page granularity)
+/// and 64 MB (ceiling, avoids OOM on ultra-long reads at high parallelism).
 pub fn compute_write_buffer_size(read_length: usize) -> usize {
     let bytes_per_record = 2 * read_length + 42;
     let target = bytes_per_record * 512;
@@ -139,26 +140,6 @@ pub fn estimate_sequence_capacity<P: AsRef<Path>>(
     let divisor = compute_bytes_per_read(read_length, is_gz);
 
     Ok((file_size_bytes / divisor).clamp(1, MAX_PREALLOC_ENTRIES))
-}
-
-/// Default capacity returned when automatic estimation fails or the file
-/// does not exist.  Matches the constant used in `UniqueFastxStream::new`.
-const DEFAULT_CAPACITY: usize = 65_536;
-
-/// Default assumed read length (Illumina short-read) used when the caller
-/// does not supply one.
-const DEFAULT_READ_LENGTH: usize = 150;
-
-/// Estimates hash-set capacity from a file path alone, with no required
-/// parameters.  This is the "fire-and-forget" version of
-/// [`estimate_sequence_capacity`]: it assumes a 150 bp read length and
-/// silently falls back to a small default if the file is missing, empty,
-/// or its metadata cannot be read.
-///
-/// Intended for the library API (`UniqueFastxStream::new`) where the
-/// caller may not know — or care about — the dataset size up front.
-pub fn auto_estimate_capacity(path: &str) -> usize {
-    estimate_sequence_capacity(path, DEFAULT_READ_LENGTH).unwrap_or(DEFAULT_CAPACITY)
 }
 
 /// Preloads existing hashes into memory from an existing output file (Single-End).
