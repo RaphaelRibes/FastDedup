@@ -1,4 +1,6 @@
-[![Pixi Badge](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
+![Version](https://img.shields.io/badge/Version-1.2.0-blue)
+[![Crates.io](https://img.shields.io/crates/v/fastdedup?color=orange&label=cargo)](https://crates.io/crates/fastdedup)
+[![Conda Receipt](https://img.shields.io/badge/install%20with-bioconda-brightgreen)](https://anaconda.org/bioconda/fdedup)
 
 # FastDedup
 
@@ -12,13 +14,8 @@ Paper in preparation, you can check it [here](https://gitlab.etu.umontpellier.fr
 ## Features
 
 - **Fast & Memory Efficient**: Uses zero-allocation sequence parsing and a non-cryptographic high-speed hashing cache, which automatically scales based on the estimated input file size.
-- **Supports Compressed Formats**: Transparently reads and writes both uncompressed and GZIP compressed (`.gz`) FASTQ/FASTA files.
-- **Incremental Deduplication & Auto-Recovery**: By default, FDedup appends new sequences to an existing output file. It safely pre-loads existing hashes to prevent duplicates. If an uncompressed output file is corrupted due to a previous crash, FDedup automatically truncates it to the last valid sequence and resumes safely.
-
-## Requirements
-If you want to build it from source, you need to have the following dependencies installed:
-- [Rust](https://rustup.rs/) (>= 1.85)
-- [Pixi](https://pixi.sh) (Optional, for running workflows and benchmarks)
+- **Supports Compressed Formats**: Transparently reads both uncompressed and GZIP compressed (`.gz`) FASTQ/FASTA files. Writes to both uncompressed and GZIP compressed formats.
+- **Incremental Deduplication & Auto-Recovery**: By default, FDedup appends new sequences to an existing uncompressed output file. It safely pre-loads existing hashes to prevent duplicates. If an uncompressed output file is corrupted due to a previous crash, FDedup automatically truncates it to the last valid sequence and resumes safely.
 
 ## Installation
 
@@ -39,7 +36,7 @@ You can install FastDedup directly from Cargo:
 cargo install fastdedup
 ```
 
-## Usage
+## CLI Usage
 
 ```bash
 fdedup [OPTIONS] --input <INPUT>
@@ -52,13 +49,13 @@ fdedup [OPTIONS] --input <INPUT>
 - `-f, --force`: Overwrite the output file if it exists (instead of pre-loading hashes and appending).
 - `-v, --verbose`: Print processing stats, such as execution time, number of sequences, and duplication rates.
 - `-s, --dry-run`: Calculate duplication rate without creating an output file.
-- `-t, --threshold <THRESHOLD>`: Threshold for automatic hash size selection$^1$ (default: 0.01).
+- `-t, --threshold <THRESHOLD>`: Threshold for automatic hash size selection$^1$ (default: 0.001).
 - `-H, --hash <HASH>`: Manually specify hash size (64 or 128 bits).
+- `-c, --compression <LEVEL>`: GZIP compression level, 1–9 (default: 6).
+- `-P, --read-length <LENGTH>`: Expected read length in base pairs, used to tune I/O buffers (default: 150).
 
-1: The probability $p$ of collision is calculated as $p= \frac{x^2}{2*2^{64}}$ where $x$ is the estimated number of hashes. 
+1: The probability $p$ of having at least one collision is calculated as $p= \frac{x^2}{2 \cdot 2^{64}}$ where $x$ is the estimated number of hashes.
 If the probability is higher than the specified threshold, FDedup will automatically switch to 128-bit hashing to nullify the risk of collisions.
-
-> Note: you need $\sqrt{2+2^{64}*10^{-3}} \approx 0.19*10^9$ sequences to have a 1‰ chance of collision with 64-bit hashing, and $0.28*10^{17}$ sequences to have the same chance with 128-bit hashing. 
 
 ### Run it from Cargo
 
@@ -93,25 +90,41 @@ singularity run fdedup.sif fdedup --input <INPUT> [OPTIONS]
 
 > Note: `--force` is very slow when used in a Singularity container. We recommend just deleting the output file before running the container if you want to start from scratch.
 
-You can build the container yourself using [pixitainer](https://github.com/RaphaelRibes/pixitainer):
+### Run directly with the binary
 
-1. Install pixitainer:
+After downloading the latest release, you can run the binary directly:
 
 ```bash
-pixi global install -c https://prefix.dev/raphaelribes -c https://prefix.dev/conda-forge pixitainer
+./fdedup --input <INPUT> [OPTIONS]
 ```
 
-2. Build the container:
+## Build it yourself
+### Requirements
+If you want to build it from source, you need to have the following dependencies installed:
+- [Rust](https://rustup.rs/) (>= 1.85)
+- [Pixi](https://pixi.sh) and [pixitainer](https://github.com/RaphaelRibes/pixitainer) to build the container
 
-```shell
+### Build and run with Cargo
+You can build and run FastDedup directly with Cargo:
+
+```bash
+cargo build --release
+cargo run --release -- --input <INPUT> [OPTIONS]
+```
+
+### Build and run with pixitainer
+You can also build and run FastDedup with pixitainer:
+
+```bash
 pixi containerize
+apptainer run fdedup.sif fdedup --input <INPUT> [OPTIONS]
 ```
 
 ## Recommendations
 
 If you are using FDedup in a pre-processing step, we recommend you to not export your file to a `.gz` format.
-If there is any crash, FDedup cannot restart from a compressed file, and you will lose all the progress.
-It is because a corrupted gzipped flux will make the file unreadable, and you will have to start from scratch using `--force`.
+Incremental/resumable deduplication, only works with uncompressed output files.
+If you output to a compressed format, FDedup requires `--force` to restart from scratch on any subsequent run.
 However, if you output to an uncompressed format, FDedup will automatically detect any crash-induced corruption, safely truncate the file to the last valid sequence, and seamlessly resume deduplication.
 
 ## To-Do List
@@ -120,11 +133,11 @@ However, if you output to an uncompressed format, FDedup will automatically dete
 - [ ] Add **Multithreading** to parallelize sequence hashing and processing.
 - [ ] Support tracking sequence **abundances** (counts) instead of naive discarding.
 - [x] Add a possibility for exporting sequences as **FASTA**.
-- [ ] Improve error handling.
+- [x] Improve error handling.
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](Licence) file for details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Author
 

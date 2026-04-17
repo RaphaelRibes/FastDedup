@@ -1,6 +1,6 @@
 [workspace]
 name = "FDedup"
-version = "1.1.0"
+version = "1.2.0"
 description = "A fast and memory-efficient FASTX PCR deduplication tool"
 authors = ["Raphaël Ribes", "Céline Mandier"]
 platforms = ["linux-64", "osx-64", "linux-aarch64", "osx-arm64"]
@@ -8,12 +8,21 @@ channels = ["conda-forge"]
 
 [tool.pixitainer]
 add-file = ["Cargo.lock:/opt/conf/Cargo.lock", "Cargo.toml:/opt/conf/Cargo.toml", "src:/opt/conf/src"]
-post-command = ["pixi run cargo build --release", "mv ./target/release/fdedup /usr/local/bin/fdedup"]
+post-command = [
+    "pixi run cargo build --release",
+    "mv ./target/release/fdedup /usr/local/bin/fdedup",
+    "rm -rf /opt/conf/target",
+]
 keep-def = true
 env = ["default"]
-seamless = true
 output = "fdedup.sif"
 pixi-version = "0.64.0"
+label = ["Authors:Raphaël Ribes, Céline Mandier", "Description:A fast and memory-efficient FASTX PCR deduplication tool", "License:MIT"]
+base-image = "ubuntu:24.04"
+
+[tool.pixitainer.docker]
+output = "fdedup"
+user = "nobody"
 
 [dependencies]
 rust = ">=1.93.1,<1.94"

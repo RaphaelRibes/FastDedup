@@ -1,4 +1,5 @@
 use clap::{Parser, ValueEnum};
+use crate::hasher::HashType;
 
 const ASCII_ART: &str = r#"
  /$$$$$$$$ /$$$$$$$                  /$$
@@ -30,7 +31,7 @@ pub struct Cli {
     pub input: String,
 
     /// Path to the R2 input FASTX file (Optional, enables Paired-End mode)
-    #[arg(short = '2', long)]
+    #[arg(short = '2', long, requires = "output_r2")]
     pub input_r2: Option<String>,
 
     /// Path to the output file (R1 or Single-End)
@@ -40,7 +41,7 @@ pub struct Cli {
 
     /// Path to the R2 output file (Required if --input-r2 is provided)
     /// Must have the same format as --output
-    #[arg(short = 'p', long)]
+    #[arg(short = 'p', long, requires = "input_r2")]
     pub output_r2: Option<String>,
 
     /// Force overwrite of output files if they exist
@@ -66,6 +67,12 @@ pub struct Cli {
     /// Set the GZIP compression level (1-9)
     #[arg(long, short = 'c', default_value_t = 6, value_parser = clap::value_parser!(u32).range(1..=9))]
     pub compression: u32,
+
+    /// Expected read length in base pairs, used to tune I/O buffer sizes and capacity estimates.
+    /// Does not need to be exact. Defaults to 150bp (Illumina short reads).
+    /// Examples: 150 for Illumina, 10000 for ONT, 100000 for ultra-long ONT.
+    #[arg(long, short = 'P', default_value_t = 150, value_parser = clap::value_parser!(usize))]
+    pub read_length: usize,
 }
 
 /// The selected hash mode (64-bit or 128-bit)
@@ -75,4 +82,13 @@ pub enum HashMode {
     Bit64,
     #[value(name = "128")]
     Bit128,
+}
+
+impl From<HashMode> for HashType {
+    fn from(mode: HashMode) -> Self {
+        match mode {
+            HashMode::Bit64 => HashType::XXH3_64,
+            HashMode::Bit128 => HashType::XXH3_128,
+        }
+    }
 }

@@ -371,7 +371,7 @@ fn test_fichier_entree_inexistant() {
         .arg("-1").arg("fichier_fantome.fastq")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Failed to read input file"));
+        .stderr(predicate::str::contains("Input file not found"));
 }
 
 /// Ne teste pas de chaîne exacte issue de needletail (fragile aux mises à jour
