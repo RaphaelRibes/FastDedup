@@ -15,7 +15,6 @@ post-command = [
 ]
 keep-def = true
 env = ["default"]
-seamless = true
 output = "fdedup.sif"
 pixi-version = "0.64.0"
 label = ["Authors:Raphaël Ribes, Céline Mandier", "Description:A fast and memory-efficient FASTX PCR deduplication tool", "License:MIT"]
