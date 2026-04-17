@@ -2,6 +2,7 @@ use crate::hasher::{HashVerifier, SequenceHasher};
 use crate::utils::{
     compute_write_buffer_size, preload_existing_hashes, preload_existing_paired_hashes,
     prepare_writer, validate_format_compatibility, write_fasta_record, OutputFormat,
+    base_read_id
 };
 use anyhow::{bail, Context, Result};
 use needletail::parse_fastx_file;
@@ -178,16 +179,8 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
             let seq_r1 = record_r1_res.context("Invalid sequence in R1")?;
             let seq_r2 = record_r2_res.context("Invalid sequence in R2")?;
 
-            let base_id_r1 = seq_r1
-                .id()
-                .split(|&b| b == b' ')
-                .next()
-                .unwrap_or(seq_r1.id());
-            let base_id_r2 = seq_r2
-                .id()
-                .split(|&b| b == b' ')
-                .next()
-                .unwrap_or(seq_r2.id());
+            let base_id_r1 = base_read_id(seq_r1.id());
+            let base_id_r2 = base_read_id(seq_r2.id());
 
             if base_id_r1 != base_id_r2 {
                 bail!(
@@ -204,6 +197,13 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
                 duplicates += 1;
             }
             processed_sequences += 1;
+
+            if reader_r1.next().is_some() || reader_r2.next().is_some() {
+                bail!(
+                "Desynchronization detected at the end: one file contains more \
+                 reads than the other (R1 and R2 length mismatch)."
+                );
+            }
         }
 
         return Ok((processed_sequences, duplicates));

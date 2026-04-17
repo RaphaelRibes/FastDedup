@@ -270,6 +270,23 @@ pub fn validate_format_compatibility(has_quality: bool, output_format: OutputFor
     Ok(())
 }
 
+/// Extracts the base read ID, stripping both the description (anything after
+/// the first whitespace) and the `/1` or `/2` mate suffix used by pre-CASAVA-1.8
+/// Illumina headers and some SRA `fastq-dump --split-files` outputs.
+#[inline]
+pub fn base_read_id(id: &[u8]) -> &[u8] {
+    // Strip description: "ID desc" → "ID"
+    let head = id.split(|&b| b == b' ' || b == b'\t').next().unwrap_or(id);
+    // Strip /1 or /2 mate suffix if present
+    if head.len() >= 2 {
+        let tail = &head[head.len() - 2..];
+        if tail == b"/1" || tail == b"/2" {
+            return &head[..head.len() - 2];
+        }
+    }
+    head
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +445,21 @@ mod tests {
     fn test_is_gz() {
         assert!(OutputFormat::is_gz(Path::new("file.fastq.gz")));
         assert!(!OutputFormat::is_gz(Path::new("file.fastq")));
+    }
+
+    #[test]
+    fn test_base_read_id_strips_mate_suffix() {
+        assert_eq!(base_read_id(b"HWUSI-EAS100R:6:73:941:1973#0/1"),
+                   b"HWUSI-EAS100R:6:73:941:1973#0");
+        assert_eq!(base_read_id(b"HWUSI-EAS100R:6:73:941:1973#0/2"),
+                   b"HWUSI-EAS100R:6:73:941:1973#0");
+        // CASAVA 1.8+ format (no /N suffix, metadata after space)
+        assert_eq!(base_read_id(b"HWI-ST1276:71:C1162ACXX:1:1101:1208:2458 1:N:0:CGATGT"),
+                   b"HWI-ST1276:71:C1162ACXX:1:1101:1208:2458");
+        // SRA split-files variant
+        assert_eq!(base_read_id(b"SRR001666.1/1 HWI:1:1:82:1089 length=36"),
+                   b"SRR001666.1");
+        // No suffix, no description
+        assert_eq!(base_read_id(b"read42"), b"read42");
     }
 }
