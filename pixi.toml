@@ -1,8 +1,8 @@
 [workspace]
-name = "FDedup"
-version = "1.2.0"
+name = "FastDedup"
+version = "1.2.2"
 description = "A fast and memory-efficient FASTX PCR deduplication tool"
-authors = ["Raphaël Ribes", "Céline Mandier"]
+authors = ["Raphaël Ribes", "Céline Mandier", "Alice Baniel"]
 platforms = ["linux-64", "osx-64", "linux-aarch64", "osx-arm64"]
 channels = ["conda-forge"]
 
@@ -17,7 +17,11 @@ keep-def = true
 env = ["default"]
 output = "fdedup.sif"
 pixi-version = "0.64.0"
-label = ["Authors:Raphaël Ribes, Céline Mandier", "Description:A fast and memory-efficient FASTX PCR deduplication tool", "License:MIT"]
+label = [
+    "Authors:Raphaël Ribes, Céline Mandier, Alice Baniel",
+    "Description:A fast and memory-efficient FASTX PCR deduplication tool",
+    "License:MIT"
+]
 base-image = "ubuntu:24.04"
 
 [tool.pixitainer.docker]
@@ -52,7 +56,7 @@ description = "Run a demonstration of FDedup"
 cmd = "./demo.sh"
 
 [tasks.mk_tarball]
-cmd = "cargo build --release && mv target/release/fdedup . && tar -czvf fdedup_$(grep -m 1 -oP '^version\\s*=\\s*\"\\K[^\"]+' pixi.toml)_linux_x86_64.tar.gz fdedup && rm fdedup_$(grep -m 1 -oP '^version\\s*=\\s*\"\\K[^\"]+' pixi.toml)"
+cmd = "cp target/release/fdedup . && tar -czvf fdedup_$(grep -m 1 -oP '^version\\s*=\\s*\"\\K[^\"]+' pixi.toml)_linux_x86_64.tar.gz fdedup && rm fdedup"
 
 [environments]
 profile = ["profile"]
