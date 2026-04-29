@@ -151,3 +151,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 # Acknowledgements
 
 Computations were performed on the ISDM-MESO HPC platform, funded in the framework of State-region planning contracts (Contrat de plan État-région – CPER) by the French Government, the Occitanie/Pyrénées-Méditerranée Region, Montpellier Méditerranée Métropole, and the University of Montpellier.
+Funding came from a grant awarded to Alice Baniel by the University of Montpellier (I-SITE Excellence Programme 2022 - SOFIT).
