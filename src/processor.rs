@@ -198,13 +198,23 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
                 duplicates += 1;
             }
             processed_sequences += 1;
+        }
 
-            if reader_r1.next().is_some() || reader_r2.next().is_some() {
-                bail!(
-                    "Desynchronization detected at the end: one file contains more \
-                 reads than the other (R1 and R2 length mismatch)."
-                );
-            }
+        // Count remaining records to detect length mismatch
+        let mut r1_remaining = 0;
+        while reader_r1.next().is_some() {
+            r1_remaining += 1;
+        }
+        let mut r2_remaining = 0;
+        while reader_r2.next().is_some() {
+            r2_remaining += 1;
+        }
+        if r1_remaining != r2_remaining {
+            bail!(
+                "Desynchronization detected at the end: R1 has {} unmatched reads, R2 has {} unmatched reads",
+                r1_remaining,
+                r2_remaining
+            );
         }
 
         return Ok((processed_sequences, duplicates));

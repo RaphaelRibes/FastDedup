@@ -127,7 +127,7 @@ mod tests {
     fn test_verifier_detects_duplicate() {
         let mut v = HashVerifier::<u64>::new(16);
         let h = u64::hash_sequence(b"ATCG");
-        assert!(v.verify(h));  // first insert: unique
+        assert!(v.verify(h)); // first insert: unique
         assert!(!v.verify(h)); // second insert: duplicate
     }
 

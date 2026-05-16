@@ -1,12 +1,12 @@
-use assert_cmd::cargo;
 use assert_cmd::Command;
+use assert_cmd::cargo;
 use assert_fs::prelude::*;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use predicates::prelude::*;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 
 // ================================================================
 // UTILITAIRE : BUILDER DE COMMANDE
@@ -69,7 +69,15 @@ fn generer_qualite(index: usize) -> String {
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
         let r = (state >> 33) % 100;
-        let bin = if r < 5 { 0 } else if r < 10 { 1 } else if r < 25 { 2 } else { 3 };
+        let bin = if r < 5 {
+            0
+        } else if r < 10 {
+            1
+        } else if r < 25 {
+            2
+        } else {
+            3
+        };
         qual.push(BINS[bin]);
     }
     String::from_utf8(qual).unwrap()
@@ -368,7 +376,8 @@ fn test_fichier_entree_inexistant() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     cmd()
         .current_dir(temp_dir.path())
-        .arg("-1").arg("fichier_fantome.fastq")
+        .arg("-1")
+        .arg("fichier_fantome.fastq")
         .assert()
         .failure()
         .stderr(predicate::str::contains("Input file not found"));
@@ -382,7 +391,8 @@ fn test_fichier_entree_vide() {
     let fichier_vide = temp_dir.child("vide.fastq");
     fichier_vide.touch().unwrap();
     cmd()
-        .arg("-1").arg(fichier_vide.path())
+        .arg("-1")
+        .arg(fichier_vide.path())
         .arg("-s")
         .assert()
         .failure();
@@ -396,7 +406,8 @@ fn test_fichier_entree_mauvais_format() {
         .write_str("Ceci n'est pas un fichier FASTQ\nAvec plusieurs lignes.")
         .unwrap();
     cmd()
-        .arg("-1").arg(fichier_texte.path())
+        .arg("-1")
+        .arg(fichier_texte.path())
         .arg("-s")
         .assert()
         .failure()
@@ -411,8 +422,10 @@ fn test_fichier_sortie_chemin_inexistant() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     let fichier_entree = generer_fastq(&temp_dir, "entree.fastq", 10, 0);
     cmd()
-        .arg("-1").arg(fichier_entree.path())
-        .arg("-o").arg("/chemin/vers/un/dossier/inexistant/sortie.fastq")
+        .arg("-1")
+        .arg(fichier_entree.path())
+        .arg("-o")
+        .arg("/chemin/vers/un/dossier/inexistant/sortie.fastq")
         .assert()
         .failure();
 }
@@ -426,8 +439,10 @@ fn test_fichier_sortie_gz_corrompu() {
         .write_str("Ceci n'est pas un gzip valide.")
         .unwrap();
     cmd()
-        .arg("-1").arg(fichier_entree.path())
-        .arg("-o").arg(fichier_sortie_corrompu.path())
+        .arg("-1")
+        .arg(fichier_entree.path())
+        .arg("-o")
+        .arg(fichier_sortie_corrompu.path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("Error opening preload file"));
@@ -442,8 +457,10 @@ fn test_taux_duplication_zero_pourcent() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     let entree = generer_fastq(&temp_dir, "100_uniques.fastq", 100, 0);
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Processed fragments: 100"))
@@ -456,8 +473,10 @@ fn test_taux_duplication_9_09_pourcent() {
     // 100 uniques + 10 duplicats = 110 lectures, 10/110 ≈ 9.09%
     let entree = generer_fastq(&temp_dir, "110_seq.fastq", 100, 10);
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Processed fragments: 110"))
@@ -470,8 +489,10 @@ fn test_taux_duplication_50_pourcent() {
     // 10 uniques + 10 duplicats = 20 lectures, 10/20 = 50.00%
     let entree = generer_fastq(&temp_dir, "50_pourcent.fastq", 10, 10);
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Processed fragments: 20"))
@@ -485,8 +506,10 @@ fn test_taux_duplication_30_pourcent_novaseq() {
     // 70 uniques + 30 duplicats = 100 lectures, 30/100 = 30.00%
     let entree = generer_fastq(&temp_dir, "30_pourcent.fastq", 70, 30);
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Processed fragments: 100"))
@@ -503,14 +526,18 @@ fn test_taux_duplication_entree_toutes_identiques() {
     for i in 0..10 {
         contenu.push_str(&format!(
             "@read_{} 1:N:0:ATGC\n{}\n+\n{}\n",
-            i, seq, generer_qualite(i)
+            i,
+            seq,
+            generer_qualite(i)
         ));
     }
     fichier.write_str(&contenu).unwrap();
 
     cmd()
-        .arg("-1").arg(fichier.path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(fichier.path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Processed fragments: 10"))
@@ -529,8 +556,10 @@ fn test_entree_fastq_gz_compresse() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -550,8 +579,10 @@ fn test_entree_fastq_gz_dry_run() {
     let entree = generer_fastq_gz(&temp_dir, "entree.fastq.gz", 50, 10);
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Processed fragments: 60"))
@@ -569,14 +600,22 @@ fn test_sortie_fastq_non_compresse() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
-    assert!(contenu.starts_with('@'), "La sortie FASTQ doit commencer par '@'");
-    assert!(contenu.contains('+'), "La sortie FASTQ doit contenir la ligne '+'");
+    assert!(
+        contenu.starts_with('@'),
+        "La sortie FASTQ doit commencer par '@'"
+    );
+    assert!(
+        contenu.contains('+'),
+        "La sortie FASTQ doit contenir la ligne '+'"
+    );
     assert_eq!(compter_sequences_fastq(&contenu), 10);
 }
 
@@ -587,8 +626,10 @@ fn test_sortie_fastq_gz_compresse() {
     let sortie = temp_dir.child("sortie.fastq.gz");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -608,13 +649,18 @@ fn test_sortie_fq_extension() {
     let sortie = temp_dir.child("sortie.fq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
-    assert!(contenu.starts_with('@'), "L'extension .fq doit produire du FASTQ");
+    assert!(
+        contenu.starts_with('@'),
+        "L'extension .fq doit produire du FASTQ"
+    );
     assert_eq!(compter_sequences_fastq(&contenu), 5);
 }
 
@@ -625,8 +671,10 @@ fn test_sortie_fq_gz_compresse() {
     let sortie = temp_dir.child("sortie.fq.gz");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -645,14 +693,22 @@ fn test_sortie_fasta_extension_fasta() {
     let sortie = temp_dir.child("sortie.fasta");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
-    assert!(contenu.starts_with('>'), "La sortie .fasta doit commencer par '>'");
-    assert!(!contenu.contains('+'), "La sortie FASTA ne doit pas contenir de ligne '+'");
+    assert!(
+        contenu.starts_with('>'),
+        "La sortie .fasta doit commencer par '>'"
+    );
+    assert!(
+        !contenu.contains('+'),
+        "La sortie FASTA ne doit pas contenir de ligne '+'"
+    );
     assert_eq!(compter_sequences_fasta(&contenu), 10);
 }
 
@@ -663,13 +719,18 @@ fn test_sortie_fasta_extension_fa() {
     let sortie = temp_dir.child("sortie.fa");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
-    assert!(contenu.starts_with('>'), "L'extension .fa doit produire du FASTA");
+    assert!(
+        contenu.starts_with('>'),
+        "L'extension .fa doit produire du FASTA"
+    );
     assert_eq!(compter_sequences_fasta(&contenu), 7);
 }
 
@@ -680,13 +741,18 @@ fn test_sortie_fasta_extension_fna() {
     let sortie = temp_dir.child("sortie.fna");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
     let contenu = fs::read_to_string(sortie.path()).unwrap();
-    assert!(contenu.starts_with('>'), "L'extension .fna doit produire du FASTA");
+    assert!(
+        contenu.starts_with('>'),
+        "L'extension .fna doit produire du FASTA"
+    );
     assert_eq!(compter_sequences_fasta(&contenu), 7);
 }
 
@@ -697,8 +763,10 @@ fn test_sortie_fasta_gz_compresse() {
     let sortie = temp_dir.child("sortie.fasta.gz");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -718,8 +786,10 @@ fn test_entree_fasta_sortie_fasta() {
     let sortie = temp_dir.child("sortie.fasta");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -737,11 +807,15 @@ fn test_entree_fasta_sortie_fastq_non_supporte() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("FASTA → FASTQ conversion not supported"));
+        .stderr(predicate::str::contains(
+            "FASTA → FASTQ conversion not supported",
+        ));
 }
 
 // ================================================================
@@ -755,8 +829,10 @@ fn test_force_overwrites_existing_file() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree_1.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree_1.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -768,8 +844,10 @@ fn test_force_overwrites_existing_file() {
     // Second passage avec --force et un fichier plus petit : doit écraser, pas ajouter
     let entree_2 = generer_fastq(&temp_dir, "entree_2.fastq", 4, 0);
     cmd()
-        .arg("-1").arg(entree_2.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree_2.path())
+        .arg("-o")
+        .arg(sortie.path())
         .arg("--force")
         .assert()
         .success();
@@ -789,16 +867,20 @@ fn test_without_force_resumes_from_existing_output() {
 
     // Premier passage : 5 séquences uniques
     cmd()
-        .arg("-1").arg(entree_initiale.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree_initiale.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
     // Deuxième passage : les 5 mêmes + 5 nouvelles
     let entree_complete = generer_fastq(&temp_dir, "entree_complete.fastq", 10, 0);
     cmd()
-        .arg("-1").arg(entree_complete.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree_complete.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -834,9 +916,12 @@ fn test_selection_automatique_hash_128_bits_via_threshold() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
-        .arg("-t").arg("0.000000000000000000001") // threshold ≈ 0 → seuil = ~0 → 128-bit
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
+        .arg("-t")
+        .arg("0.000000000000000000001") // threshold ≈ 0 → seuil = ~0 → 128-bit
         .arg("-v")
         .assert()
         .success()
@@ -851,9 +936,12 @@ fn test_selection_automatique_hash_64_bits_via_threshold() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
-        .arg("-t").arg("1.0") // seuil ≈ 6 milliards → fichiers de test bien en dessous
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
+        .arg("-t")
+        .arg("1.0") // seuil ≈ 6 milliards → fichiers de test bien en dessous
         .arg("-v")
         .assert()
         .success()
@@ -868,16 +956,17 @@ fn test_avertissement_hash_et_threshold_ignores() {
     let sortie = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
-        .arg("-H").arg("64")
-        .arg("-t").arg("0.5")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
+        .arg("-H")
+        .arg("64")
+        .arg("-t")
+        .arg("0.5")
         .assert()
         .success()
-        .stderr(
-            predicate::str::contains("threshold")
-                .and(predicate::str::contains("ignored")),
-        );
+        .stderr(predicate::str::contains("threshold").and(predicate::str::contains("ignored")));
 }
 
 // ================================================================
@@ -891,9 +980,12 @@ fn test_hachage_64_bits_explicite() {
     let sortie = temp_dir.child("sortie_64.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
-        .arg("-H").arg("64")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
+        .arg("-H")
+        .arg("64")
         .arg("-v")
         .assert()
         .success()
@@ -912,9 +1004,12 @@ fn test_hachage_128_bits_explicite() {
     let sortie = temp_dir.child("sortie_128.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
-        .arg("-H").arg("128")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
+        .arg("-H")
+        .arg("128")
         .arg("-v")
         .assert()
         .success()
@@ -934,16 +1029,22 @@ fn test_hachage_64_et_128_bits_produisent_le_meme_resultat() {
     let sortie_128 = temp_dir.child("sortie_128.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie_64.path())
-        .arg("-H").arg("64")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie_64.path())
+        .arg("-H")
+        .arg("64")
         .assert()
         .success();
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie_128.path())
-        .arg("-H").arg("128")
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie_128.path())
+        .arg("-H")
+        .arg("128")
         .assert()
         .success();
 
@@ -966,8 +1067,10 @@ fn test_compression_gz_valide_fastq() {
     let sortie = temp_dir.child("sortie.fastq.gz");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -983,8 +1086,10 @@ fn test_compression_gz_valide_fasta() {
     let sortie = temp_dir.child("sortie.fasta.gz");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie.path())
         .assert()
         .success();
 
@@ -1001,27 +1106,33 @@ fn test_deduplication_preservee_apres_compression() {
     let sortie_non_gz = temp_dir.child("sortie.fastq");
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie_gz.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie_gz.path())
         .assert()
         .success();
 
     cmd()
-        .arg("-1").arg(entree.path())
-        .arg("-o").arg(sortie_non_gz.path())
+        .arg("-1")
+        .arg(entree.path())
+        .arg("-o")
+        .arg(sortie_non_gz.path())
         .arg("--force")
         .assert()
         .success();
 
     let count_gz = compter_sequences_fastq(&decompresser_gz(sortie_gz.path()));
-    let count_non_gz =
-        compter_sequences_fastq(&fs::read_to_string(sortie_non_gz.path()).unwrap());
+    let count_non_gz = compter_sequences_fastq(&fs::read_to_string(sortie_non_gz.path()).unwrap());
 
     assert_eq!(
         count_gz, count_non_gz,
         "Le nombre de séquences doit être identique entre .gz et non-.gz"
     );
-    assert_eq!(count_gz, 10, "Doit contenir exactement 10 séquences uniques");
+    assert_eq!(
+        count_gz, 10,
+        "Doit contenir exactement 10 séquences uniques"
+    );
 }
 
 // ================================================================
@@ -1035,16 +1146,16 @@ fn test_paire_erreur_sortie_r2_manquante() {
     let sortie_r1 = temp_dir.child("sortie_r1.fastq");
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(sortie_r1.path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
         // -p intentionnellement absent
         .assert()
         .failure()
-        .stderr(
-            predicate::str::contains("--output-r2")
-                .and(predicate::str::contains("required")),
-        );
+        .stderr(predicate::str::contains("--output-r2").and(predicate::str::contains("required")));
 }
 
 #[test]
@@ -1053,20 +1164,24 @@ fn test_paire_desynchronisee_en_tete_bloquee() {
     let (r1, r2) = generer_fastq_paire(&temp_dir, "R1_desync.fastq", "R2_desync.fastq", 10, 0);
 
     // Insérer une lecture en tête de R2 : l'ID du premier record R2 ne correspond plus à R1
-    let mut contenu_r2_corrompu = String::from(
-        "@A00123:456:HFWV2DSXX:1:1101:9999:9999 2:N:0:ATGC\nATGC\n+\nFFFF\n",
-    );
+    let mut contenu_r2_corrompu =
+        String::from("@A00123:456:HFWV2DSXX:1:1101:9999:9999 2:N:0:ATGC\nATGC\n+\nFFFF\n");
     contenu_r2_corrompu.push_str(&fs::read_to_string(r2.path()).unwrap());
     r2.write_str(&contenu_r2_corrompu).unwrap();
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-p").arg(temp_dir.child("dummy_r2.fastq").path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-p")
+        .arg(temp_dir.child("dummy_r2.fastq").path())
         .arg("-s")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Critical desynchronization detected"));
+        .stderr(predicate::str::contains(
+            "Critical desynchronization detected",
+        ));
 }
 
 /// Vérifie la détection de désynchronisation de fin de fichier quand R1 > R2.
@@ -1074,18 +1189,23 @@ fn test_paire_desynchronisee_en_tete_bloquee() {
 fn test_paire_desync_fin_fichier_r1_plus_long() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     // R1 : 12 reads, R2 : 10 reads — les 10 premiers s'apparient correctement
-    let (r1, r2) =
-        generer_fastq_paire_desynchronisee(&temp_dir, "R1.fastq", "R2.fastq", 12, 10);
+    let (r1, r2) = generer_fastq_paire_desynchronisee(&temp_dir, "R1.fastq", "R2.fastq", 12, 10);
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(temp_dir.child("out_r1.fastq").path())
-        .arg("-p").arg(temp_dir.child("out_r2.fastq").path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(temp_dir.child("out_r1.fastq").path())
+        .arg("-p")
+        .arg(temp_dir.child("out_r2.fastq").path())
         .arg("--force")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Desynchronization detected at the end"));
+        .stderr(predicate::str::contains(
+            "Desynchronization detected at the end",
+        ));
 }
 
 /// Vérifie la détection de désynchronisation de fin de fichier quand R2 > R1.
@@ -1093,18 +1213,23 @@ fn test_paire_desync_fin_fichier_r1_plus_long() {
 fn test_paire_desync_fin_fichier_r2_plus_long() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
     // R1 : 10 reads, R2 : 12 reads
-    let (r1, r2) =
-        generer_fastq_paire_desynchronisee(&temp_dir, "R1.fastq", "R2.fastq", 10, 12);
+    let (r1, r2) = generer_fastq_paire_desynchronisee(&temp_dir, "R1.fastq", "R2.fastq", 10, 12);
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(temp_dir.child("out_r1.fastq").path())
-        .arg("-p").arg(temp_dir.child("out_r2.fastq").path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(temp_dir.child("out_r1.fastq").path())
+        .arg("-p")
+        .arg(temp_dir.child("out_r2.fastq").path())
         .arg("--force")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Desynchronization detected at the end"));
+        .stderr(predicate::str::contains(
+            "Desynchronization detected at the end",
+        ));
 }
 
 #[test]
@@ -1113,10 +1238,14 @@ fn test_paire_formats_incoherents() {
     let (r1, r2) = generer_fastq_paire(&temp_dir, "R1.fastq", "R2.fastq", 10, 0);
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(temp_dir.child("sortie_R1.fasta").path())
-        .arg("-p").arg(temp_dir.child("sortie_R2.fastq").path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(temp_dir.child("sortie_R1.fasta").path())
+        .arg("-p")
+        .arg(temp_dir.child("sortie_R2.fastq").path())
         .assert()
         .failure()
         .stderr(predicate::str::contains("must have the same format"));
@@ -1129,13 +1258,19 @@ fn test_paire_entree_fasta_sortie_fastq_non_supporte() {
     let (r1, r2) = generer_fasta_paire(&temp_dir, "R1.fasta", "R2.fasta", 10, 0);
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(temp_dir.child("sortie_R1.fastq").path())
-        .arg("-p").arg(temp_dir.child("sortie_R2.fastq").path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(temp_dir.child("sortie_R1.fastq").path())
+        .arg("-p")
+        .arg(temp_dir.child("sortie_R2.fastq").path())
         .assert()
         .failure()
-        .stderr(predicate::str::contains("FASTA → FASTQ conversion not supported"));
+        .stderr(predicate::str::contains(
+            "FASTA → FASTQ conversion not supported",
+        ));
 }
 
 // ================================================================
@@ -1149,10 +1284,14 @@ fn test_paire_taux_duplication_33_pourcent() {
     let (r1, r2) = generer_fastq_paire(&temp_dir, "R1.fastq", "R2.fastq", 100, 50);
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-p").arg(temp_dir.child("dummy_r2.fastq").path())
-        .arg("-s").arg("-v")
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-p")
+        .arg(temp_dir.child("dummy_r2.fastq").path())
+        .arg("-s")
+        .arg("-v")
         .assert()
         .success()
         .stdout(predicate::str::contains("Paired-End"))
@@ -1172,10 +1311,14 @@ fn test_paire_sortie_fastq() {
     let sortie_r2 = temp_dir.child("sortie_R2.fastq");
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1184,8 +1327,16 @@ fn test_paire_sortie_fastq() {
 
     assert!(contenu_r1.starts_with('@'));
     assert!(contenu_r2.starts_with('@'));
-    assert_eq!(compter_sequences_fastq(&contenu_r1), 10, "R1 doit contenir 10 paires uniques");
-    assert_eq!(compter_sequences_fastq(&contenu_r2), 10, "R2 doit contenir 10 paires uniques");
+    assert_eq!(
+        compter_sequences_fastq(&contenu_r1),
+        10,
+        "R1 doit contenir 10 paires uniques"
+    );
+    assert_eq!(
+        compter_sequences_fastq(&contenu_r2),
+        10,
+        "R2 doit contenir 10 paires uniques"
+    );
     assert_eq!(
         compter_sequences_fastq(&contenu_r1),
         compter_sequences_fastq(&contenu_r2),
@@ -1201,10 +1352,14 @@ fn test_paire_sortie_fasta() {
     let sortie_r2 = temp_dir.child("sortie_R2.fasta");
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1225,10 +1380,14 @@ fn test_paire_sortie_fastq_gz() {
     let sortie_r2 = temp_dir.child("sortie_R2.fastq.gz");
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1257,10 +1416,14 @@ fn test_paire_sortie_fasta_gz() {
     let sortie_r2 = temp_dir.child("sortie_R2.fasta.gz");
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1289,10 +1452,14 @@ fn test_paire_entree_fasta_sortie_fasta() {
     let sortie_r2 = temp_dir.child("sortie_R2.fasta");
 
     cmd()
-        .arg("-1").arg(r1.path())
-        .arg("-2").arg(r2.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1.path())
+        .arg("-2")
+        .arg(r2.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1320,16 +1487,19 @@ fn test_paire_reprise_depuis_sortie_existante() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
 
     // Premier passage : 5 paires uniques
-    let (r1_init, r2_init) =
-        generer_fastq_paire(&temp_dir, "R1_init.fastq", "R2_init.fastq", 5, 0);
+    let (r1_init, r2_init) = generer_fastq_paire(&temp_dir, "R1_init.fastq", "R2_init.fastq", 5, 0);
     let sortie_r1 = temp_dir.child("sortie_R1.fastq");
     let sortie_r2 = temp_dir.child("sortie_R2.fastq");
 
     cmd()
-        .arg("-1").arg(r1_init.path())
-        .arg("-2").arg(r2_init.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1_init.path())
+        .arg("-2")
+        .arg(r2_init.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1347,10 +1517,14 @@ fn test_paire_reprise_depuis_sortie_existante() {
         generer_fastq_paire(&temp_dir, "R1_full.fastq", "R2_full.fastq", 10, 0);
 
     cmd()
-        .arg("-1").arg(r1_full.path())
-        .arg("-2").arg(r2_full.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1_full.path())
+        .arg("-2")
+        .arg(r2_full.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1381,16 +1555,19 @@ fn test_paire_reprise_depuis_sortie_existante() {
 fn test_paire_reprise_synchronisation_r1_r2() {
     let temp_dir = assert_fs::TempDir::new().unwrap();
 
-    let (r1_init, r2_init) =
-        generer_fastq_paire(&temp_dir, "R1_init.fastq", "R2_init.fastq", 8, 0);
+    let (r1_init, r2_init) = generer_fastq_paire(&temp_dir, "R1_init.fastq", "R2_init.fastq", 8, 0);
     let sortie_r1 = temp_dir.child("sortie_R1.fastq");
     let sortie_r2 = temp_dir.child("sortie_R2.fastq");
 
     cmd()
-        .arg("-1").arg(r1_init.path())
-        .arg("-2").arg(r2_init.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1_init.path())
+        .arg("-2")
+        .arg(r2_init.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1398,10 +1575,14 @@ fn test_paire_reprise_synchronisation_r1_r2() {
         generer_fastq_paire(&temp_dir, "R1_full.fastq", "R2_full.fastq", 15, 0);
 
     cmd()
-        .arg("-1").arg(r1_full.path())
-        .arg("-2").arg(r2_full.path())
-        .arg("-o").arg(sortie_r1.path())
-        .arg("-p").arg(sortie_r2.path())
+        .arg("-1")
+        .arg(r1_full.path())
+        .arg("-2")
+        .arg(r2_full.path())
+        .arg("-o")
+        .arg(sortie_r1.path())
+        .arg("-p")
+        .arg(sortie_r2.path())
         .assert()
         .success();
 
@@ -1412,13 +1593,23 @@ fn test_paire_reprise_synchronisation_r1_r2() {
     let base_ids_r1: Vec<&str> = contenu_r1
         .lines()
         .filter(|l| l.starts_with('@'))
-        .map(|l| l.trim_start_matches('@').split_whitespace().next().unwrap_or(l))
+        .map(|l| {
+            l.trim_start_matches('@')
+                .split_whitespace()
+                .next()
+                .unwrap_or(l)
+        })
         .collect();
 
     let base_ids_r2: Vec<&str> = contenu_r2
         .lines()
         .filter(|l| l.starts_with('@'))
-        .map(|l| l.trim_start_matches('@').split_whitespace().next().unwrap_or(l))
+        .map(|l| {
+            l.trim_start_matches('@')
+                .split_whitespace()
+                .next()
+                .unwrap_or(l)
+        })
         .collect();
 
     assert_eq!(

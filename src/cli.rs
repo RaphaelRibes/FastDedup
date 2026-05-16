@@ -1,5 +1,5 @@
-use clap::{Parser, ValueEnum};
 use crate::hasher::HashType;
+use clap::{Parser, ValueEnum};
 
 const ASCII_ART: &str = r#"
  /$$$$$$$$ /$$$$$$$                  /$$
