@@ -1,4 +1,4 @@
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::hash::Hash;
 use xxhash_rust::xxh3::{xxh3_64, xxh3_128};
 
@@ -25,6 +25,34 @@ where
     /// Returns `true` if the hash is newly inserted (unique sequence), `false` if it was already present (duplicate).
     pub fn verify(&mut self, hash: T) -> bool {
         self.memory.insert(hash)
+    }
+}
+
+/// Tracks sequence abundances using a HashMap of hash → count.
+/// Used by the `--abundance` mode to annotate output headers with `;size=N`.
+pub struct AbundanceTracker<T: Hash + Eq> {
+    counts: FxHashMap<T, u32>,
+}
+
+impl<T: Hash + Eq> AbundanceTracker<T> {
+    /// Initializes the tracker with an estimated capacity to minimize reallocations.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            counts: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
+        }
+    }
+
+    /// Records an occurrence of `hash` and returns `(is_first_occurrence, count_after_insert)`.
+    pub fn track(&mut self, hash: T) -> (bool, u32) {
+        let entry = self.counts.entry(hash).or_insert(0);
+        *entry += 1;
+        let count = *entry;
+        (count == 1, count)
+    }
+
+    /// Returns the number of unique sequences tracked.
+    pub fn len(&self) -> usize {
+        self.counts.len()
     }
 }
 
@@ -136,5 +164,49 @@ mod tests {
         let mut v = HashVerifier::<u64>::new(16);
         assert!(v.verify(u64::hash_sequence(b"ATCG")));
         assert!(v.verify(u64::hash_sequence(b"GCTA")));
+    }
+
+    // --- AbundanceTracker tests ---
+
+    #[test]
+    fn test_abundance_tracker_tracks_unique() {
+        let mut t = AbundanceTracker::<u64>::new(16);
+        let (is_first, count) = t.track(42);
+        assert!(is_first);
+        assert_eq!(count, 1);
+        assert_eq!(t.len(), 1);
+    }
+
+    #[test]
+    fn test_abundance_tracker_tracks_duplicate() {
+        let mut t = AbundanceTracker::<u64>::new(16);
+        t.track(42);
+        let (is_first, count) = t.track(42);
+        assert!(!is_first);
+        assert_eq!(count, 2);
+        assert_eq!(t.len(), 1);
+    }
+
+    #[test]
+    fn test_abundance_tracker_multiple_distinct() {
+        let mut t = AbundanceTracker::<u64>::new(16);
+        assert_eq!(t.track(1).1, 1);
+        assert_eq!(t.track(2).1, 1);
+        assert_eq!(t.track(3).1, 1);
+        assert_eq!(t.len(), 3);
+    }
+
+    #[test]
+    fn test_abundance_tracker_varying_counts() {
+        let mut t = AbundanceTracker::<u64>::new(16);
+        t.track(10);
+        t.track(10);
+        t.track(10);
+        t.track(20);
+        t.track(20);
+        assert_eq!(t.track(10).1, 4);
+        assert_eq!(t.track(20).1, 3);
+        assert_eq!(t.track(30).1, 1);
+        assert_eq!(t.len(), 3);
     }
 }

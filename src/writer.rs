@@ -203,6 +203,77 @@ pub fn write_fasta_record(writer: &mut impl Write, id: &[u8], seq: &[u8]) -> Res
     Ok(())
 }
 
+/// Writes a single FASTA record with an abundance annotation suffix on the header.
+#[inline]
+pub fn write_fasta_record_with_abundance(
+    writer: &mut impl Write,
+    id: &[u8],
+    seq: &[u8],
+    abundance: u32,
+    sep: &[u8],
+) -> Result<()> {
+    writer
+        .write_all(b">")
+        .context("Error writing FASTA '>' prefix")?;
+    writer.write_all(id).context("Error writing FASTA ID")?;
+    writer
+        .write_all(sep)
+        .context("Error writing abundance separator")?;
+    let size = abundance.to_string();
+    writer
+        .write_all(size.as_bytes())
+        .context("Error writing abundance value")?;
+    writer
+        .write_all(b"\n")
+        .context("Error writing FASTA ID newline")?;
+    writer
+        .write_all(seq)
+        .context("Error writing FASTA sequence")?;
+    writer
+        .write_all(b"\n")
+        .context("Error writing FASTA sequence newline")?;
+    Ok(())
+}
+
+/// Writes a single FASTQ record with an abundance annotation suffix on the header.
+#[inline]
+pub fn write_fastq_record_with_abundance(
+    writer: &mut impl Write,
+    id: &[u8],
+    seq: &[u8],
+    qual: &[u8],
+    abundance: u32,
+    sep: &[u8],
+) -> Result<()> {
+    writer
+        .write_all(b"@")
+        .context("Error writing FASTQ '@' prefix")?;
+    writer.write_all(id).context("Error writing FASTQ ID")?;
+    writer
+        .write_all(sep)
+        .context("Error writing abundance separator")?;
+    let size = abundance.to_string();
+    writer
+        .write_all(size.as_bytes())
+        .context("Error writing abundance value")?;
+    writer
+        .write_all(b"\n")
+        .context("Error writing FASTQ ID newline")?;
+    writer
+        .write_all(seq)
+        .context("Error writing FASTQ sequence")?;
+    writer
+        .write_all(b"\n+\n")
+        .context("Error writing FASTQ '+' line")?;
+    writer
+        .write_all(qual)
+        .context("Error writing FASTQ quality")?;
+    writer
+        .write_all(b"\n")
+        .context("Error writing FASTQ quality newline")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

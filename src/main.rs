@@ -4,7 +4,10 @@ mod processor;
 mod utils;
 mod writer;
 use crate::hasher::HashType;
-use crate::processor::{DedupConfig, execute_deduplication, execute_paired_deduplication};
+use crate::processor::{
+    DedupConfig, execute_deduplication, execute_deduplication_with_abundance,
+    execute_paired_deduplication, execute_paired_deduplication_with_abundance,
+};
 use crate::utils::{
     birthday_problem_square_approximation, estimate_sequence_capacity, get_hash_method,
 };
@@ -37,6 +40,29 @@ fn dispatch(
     }
 }
 
+/// Dispatches single-end abundance-tracking based on the selected hash type.
+fn dispatch_abundance(
+    input_path: &str,
+    output_path: &str,
+    hash_type: &HashType,
+    cfg: &DedupConfig,
+) -> Result<(usize, usize)> {
+    match hash_type {
+        HashType::XXH3_64 => {
+            if cfg.verbose {
+                println!("Single-End Mode (Abundance): 64-bit Hash");
+            }
+            execute_deduplication_with_abundance::<u64>(input_path, output_path, cfg)
+        }
+        HashType::XXH3_128 => {
+            if cfg.verbose {
+                println!("Single-End Mode (Abundance): 128-bit Hash");
+            }
+            execute_deduplication_with_abundance::<u128>(input_path, output_path, cfg)
+        }
+    }
+}
+
 /// Dispatches paired-end deduplication based on the selected hash type.
 fn dispatch_paired(
     input_r1: &str,
@@ -58,6 +84,35 @@ fn dispatch_paired(
                 println!("Paired-End Mode: 128-bit Combined Hash");
             }
             execute_paired_deduplication::<u128>(input_r1, input_r2, output_r1, output_r2, cfg)
+        }
+    }
+}
+
+/// Dispatches paired-end abundance-tracking based on the selected hash type.
+fn dispatch_paired_abundance(
+    input_r1: &str,
+    input_r2: &str,
+    output_r1: &str,
+    output_r2: &str,
+    hash_type: &HashType,
+    cfg: &DedupConfig,
+) -> Result<(usize, usize)> {
+    match hash_type {
+        HashType::XXH3_64 => {
+            if cfg.verbose {
+                println!("Paired-End Mode (Abundance): 64-bit Combined Hash");
+            }
+            execute_paired_deduplication_with_abundance::<u64>(
+                input_r1, input_r2, output_r1, output_r2, cfg,
+            )
+        }
+        HashType::XXH3_128 => {
+            if cfg.verbose {
+                println!("Paired-End Mode (Abundance): 128-bit Combined Hash");
+            }
+            execute_paired_deduplication_with_abundance::<u128>(
+                input_r1, input_r2, output_r1, output_r2, cfg,
+            )
         }
     }
 }
@@ -113,6 +168,10 @@ fn main() -> Result<()> {
         );
     }
 
+    if args.dry_run && args.abundance {
+        bail!("--abundance is not compatible with --dry-run");
+    }
+
     let cfg = DedupConfig {
         force: args.force,
         verbose: args.verbose,
@@ -120,6 +179,7 @@ fn main() -> Result<()> {
         compression_level: args.compression,
         estimated_capacity: total_capacity,
         read_length: args.read_length,
+        abundance_sep: args.abundance_sep.clone(),
     };
 
     let start = Instant::now();
@@ -136,20 +196,35 @@ fn main() -> Result<()> {
             println!("--- Starting Paired-End Processing ---");
         }
 
-        dispatch_paired(
-            &args.input,
-            input_r2,
-            &args.output,
-            output_r2,
-            &selected_hash_type,
-            &cfg,
-        )?
+        if args.abundance {
+            dispatch_paired_abundance(
+                &args.input,
+                input_r2,
+                &args.output,
+                output_r2,
+                &selected_hash_type,
+                &cfg,
+            )?
+        } else {
+            dispatch_paired(
+                &args.input,
+                input_r2,
+                &args.output,
+                output_r2,
+                &selected_hash_type,
+                &cfg,
+            )?
+        }
     } else {
         if args.verbose {
             println!("--- Starting Single-End Processing ---");
         }
 
-        dispatch(&args.input, &args.output, &selected_hash_type, &cfg)?
+        if args.abundance {
+            dispatch_abundance(&args.input, &args.output, &selected_hash_type, &cfg)?
+        } else {
+            dispatch(&args.input, &args.output, &selected_hash_type, &cfg)?
+        }
     };
 
     if args.verbose {

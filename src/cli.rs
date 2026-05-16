@@ -73,6 +73,16 @@ pub struct Cli {
     /// Examples: 150 for Illumina, 10000 for ONT, 100000 for ultra-long ONT.
     #[arg(long, short = 'P', default_value_t = 150, value_parser = clap::value_parser!(usize))]
     pub read_length: usize,
+
+    /// Enables abundance tracking mode: count occurrences of each unique sequence
+    /// and annotate the output header with ;size=N.
+    #[arg(long)]
+    pub abundance: bool,
+
+    /// Separator used for abundance annotation in the sequence header (default: ";size=").
+    /// Only meaningful when --abundance is set.
+    #[arg(long, default_value = ";size=")]
+    pub abundance_sep: String,
 }
 
 /// The selected hash mode (64-bit or 128-bit)
