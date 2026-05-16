@@ -83,6 +83,11 @@ pub struct Cli {
     /// Only meaningful when --abundance is set.
     #[arg(long, default_value = ";size=")]
     pub abundance_sep: String,
+
+    /// Number of threads for parallel processing (0 = auto-detect). Default: 1 (single-threaded).
+    /// When > 1, uses a producer/consumer pipeline for parallel hashing.
+    #[arg(long, short = 'j', default_value_t = 1)]
+    pub threads: usize,
 }
 
 /// The selected hash mode (64-bit or 128-bit)

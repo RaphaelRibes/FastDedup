@@ -26,6 +26,8 @@ pub(crate) struct DedupConfig {
     pub read_length: usize,
     /// Separator for abundance annotation in output headers (e.g., ";size=").
     pub abundance_sep: String,
+    /// Number of parallel workers for multi-threaded mode (1 = single-threaded).
+    pub threads: usize,
 }
 
 // ==========================================

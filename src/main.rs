@@ -1,9 +1,11 @@
 mod cli;
 mod hasher;
+mod parallel;
 mod processor;
 mod utils;
 mod writer;
 use crate::hasher::HashType;
+use crate::parallel::{execute_deduplication_parallel, execute_paired_deduplication_parallel};
 use crate::processor::{
     DedupConfig, execute_deduplication, execute_deduplication_with_abundance,
     execute_paired_deduplication, execute_paired_deduplication_with_abundance,
@@ -117,6 +119,58 @@ fn dispatch_paired_abundance(
     }
 }
 
+/// Dispatches single-end parallel deduplication based on the selected hash type.
+fn dispatch_threaded(
+    input_path: &str,
+    output_path: &str,
+    hash_type: &HashType,
+    cfg: &DedupConfig,
+) -> Result<(usize, usize)> {
+    match hash_type {
+        HashType::XXH3_64 => {
+            if cfg.verbose {
+                println!("Single-End Mode (Multi-threaded): 64-bit Hash");
+            }
+            execute_deduplication_parallel::<u64>(input_path, output_path, cfg)
+        }
+        HashType::XXH3_128 => {
+            if cfg.verbose {
+                println!("Single-End Mode (Multi-threaded): 128-bit Hash");
+            }
+            execute_deduplication_parallel::<u128>(input_path, output_path, cfg)
+        }
+    }
+}
+
+/// Dispatches paired-end parallel deduplication based on the selected hash type.
+fn dispatch_paired_threaded(
+    input_r1: &str,
+    input_r2: &str,
+    output_r1: &str,
+    output_r2: &str,
+    hash_type: &HashType,
+    cfg: &DedupConfig,
+) -> Result<(usize, usize)> {
+    match hash_type {
+        HashType::XXH3_64 => {
+            if cfg.verbose {
+                println!("Paired-End Mode (Multi-threaded): 64-bit Combined Hash");
+            }
+            execute_paired_deduplication_parallel::<u64>(
+                input_r1, input_r2, output_r1, output_r2, cfg,
+            )
+        }
+        HashType::XXH3_128 => {
+            if cfg.verbose {
+                println!("Paired-End Mode (Multi-threaded): 128-bit Combined Hash");
+            }
+            execute_paired_deduplication_parallel::<u128>(
+                input_r1, input_r2, output_r1, output_r2, cfg,
+            )
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let args = Cli::parse();
 
@@ -180,6 +234,7 @@ fn main() -> Result<()> {
         estimated_capacity: total_capacity,
         read_length: args.read_length,
         abundance_sep: args.abundance_sep.clone(),
+        threads: args.threads,
     };
 
     let start = Instant::now();
@@ -205,6 +260,15 @@ fn main() -> Result<()> {
                 &selected_hash_type,
                 &cfg,
             )?
+        } else if cfg.threads > 1 {
+            dispatch_paired_threaded(
+                &args.input,
+                input_r2,
+                &args.output,
+                output_r2,
+                &selected_hash_type,
+                &cfg,
+            )?
         } else {
             dispatch_paired(
                 &args.input,
@@ -222,6 +286,8 @@ fn main() -> Result<()> {
 
         if args.abundance {
             dispatch_abundance(&args.input, &args.output, &selected_hash_type, &cfg)?
+        } else if cfg.threads > 1 {
+            dispatch_threaded(&args.input, &args.output, &selected_hash_type, &cfg)?
         } else {
             dispatch(&args.input, &args.output, &selected_hash_type, &cfg)?
         }
