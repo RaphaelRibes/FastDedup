@@ -1,14 +1,14 @@
 mod cli;
+mod hasher;
 mod processor;
 mod utils;
-mod hasher;
-
+mod writer;
 use crate::hasher::HashType;
+use crate::processor::{DedupConfig, execute_deduplication, execute_paired_deduplication};
 use crate::utils::{
     birthday_problem_square_approximation, estimate_sequence_capacity, get_hash_method,
 };
-use crate::processor::{execute_deduplication, execute_paired_deduplication, DedupConfig};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use cli::Cli;
 use std::path::Path;

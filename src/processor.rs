@@ -1,10 +1,10 @@
 use crate::hasher::{HashVerifier, SequenceHasher};
-use crate::utils::{
-    compute_write_buffer_size, preload_existing_hashes, preload_existing_paired_hashes,
-    prepare_writer, validate_format_compatibility, write_fasta_record, OutputFormat,
-    base_read_id
+use crate::utils::{base_read_id, compute_write_buffer_size, validate_format_compatibility};
+use crate::writer::{
+    OutputFormat, preload_existing_hashes, preload_existing_paired_hashes, prepare_writer,
+    write_fasta_record,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use needletail::parse_fastx_file;
 use std::fs::{self, OpenOptions};
 use std::io::{BufWriter, Write};
@@ -81,7 +81,9 @@ pub(crate) fn execute_deduplication<T: SequenceHasher + 'static>(
 
             if valid_bytes < current_size {
                 if is_gz {
-                    bail!("The output file (.gz) is corrupted and cannot be truncated. Use --force to restart.");
+                    bail!(
+                        "The output file (.gz) is corrupted and cannot be truncated. Use --force to restart."
+                    );
                 }
                 if cfg.verbose {
                     println!(
@@ -173,8 +175,7 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
             println!("--dry-run enabled: calculating Paired-End duplication rate.");
         }
 
-        while let (Some(record_r1_res), Some(record_r2_res)) =
-            (reader_r1.next(), reader_r2.next())
+        while let (Some(record_r1_res), Some(record_r2_res)) = (reader_r1.next(), reader_r2.next())
         {
             let seq_r1 = record_r1_res.context("Invalid sequence in R1")?;
             let seq_r2 = record_r2_res.context("Invalid sequence in R2")?;
@@ -200,7 +201,7 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
 
             if reader_r1.next().is_some() || reader_r2.next().is_some() {
                 bail!(
-                "Desynchronization detected at the end: one file contains more \
+                    "Desynchronization detected at the end: one file contains more \
                  reads than the other (R1 and R2 length mismatch)."
                 );
             }
@@ -289,9 +290,7 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
     // --- SYNCHRONIZED MAIN WRITE LOOP ---
     let mut format_validated = false;
 
-    while let (Some(record_r1_res), Some(record_r2_res)) =
-        (reader_r1.next(), reader_r2.next())
-    {
+    while let (Some(record_r1_res), Some(record_r2_res)) = (reader_r1.next(), reader_r2.next()) {
         let seq_r1 = record_r1_res.context("Invalid sequence in R1")?;
         let seq_r2 = record_r2_res.context("Invalid sequence in R2")?;
 
@@ -349,7 +348,9 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
     }
 
     if reader_r1.next().is_some() || reader_r2.next().is_some() {
-        bail!("Desynchronization detected at the end: one file contains more reads than the other!");
+        bail!(
+            "Desynchronization detected at the end: one file contains more reads than the other!"
+        );
     }
 
     buf_writer_r1
