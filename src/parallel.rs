@@ -126,6 +126,51 @@ fn wait_for_child(child_opt: Option<Child>, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Prepare an output writer, optionally using pigz for parallel gzip compression
+/// when `pigz_threads > 1` and the path ends with `.gz`.
+/// Falls back to `prepare_writer` when pigz is unavailable or output is uncompressed.
+fn create_output_writer(
+    path: &str,
+    compression_level: u32,
+    pigz_threads: usize,
+) -> Result<(Box<dyn Write>, OutputFormat, Option<Child>)> {
+    let output_path = Path::new(path);
+    let output_format = OutputFormat::from_extension(output_path);
+    let is_gz = OutputFormat::is_gz(output_path);
+
+    if pigz_threads > 1 && is_gz {
+        // Create the output file up front so pigz can write to it directly
+        let file = File::create(output_path)
+            .with_context(|| format!("Failed to create output file: {path}"))?;
+        match Command::new("pigz")
+            .arg("-p")
+            .arg(pigz_threads.to_string())
+            .arg("-c")
+            .arg(format!("-{}", compression_level))
+            .stdin(Stdio::piped())
+            .stdout(file)
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let stdin = child
+                    .stdin
+                    .take()
+                    .expect("Stdio::piped() guarantees stdin is present");
+                return Ok((Box::new(stdin), output_format, Some(child)));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // pigz not available — fall through to standard path
+            }
+            Err(e) => return Err(e).context("Failed to spawn pigz for output compression"),
+        }
+    }
+
+    // Standard path (no pigz or non-gz output)
+    let (writer, format) = prepare_writer(output_path, true, compression_level)?;
+    Ok((writer, format, None))
+}
+
 // ==========================================
 // SINGLE-END PARALLEL
 // ==========================================
@@ -217,9 +262,11 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
     drop(hash_tx);
 
     // --- WRITER (this thread) — runs concurrently with reader & workers ---
-    let output_path = Path::new(output_path);
-    let is_gz = OutputFormat::is_gz(output_path);
-    let (writer, output_format) = prepare_writer(output_path, true, cfg.compression_level)?;
+    let output_path_str = output_path;
+    let output_path = Path::new(output_path_str);
+    let pigz_comp_threads = if num_workers > 1 { num_workers } else { 0 };
+    let (writer, output_format, pigz_comp) =
+        create_output_writer(output_path_str, cfg.compression_level, pigz_comp_threads)?;
     let buf_size = compute_write_buffer_size(cfg.read_length);
     let mut buffered_writer = BufWriter::with_capacity(buf_size, writer);
 
@@ -264,6 +311,9 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
     if processed > 0 {
         buffered_writer.flush().context("Failed to flush output")?;
     }
+    // Drop the buffered writer to close pigz's stdin pipe before waiting
+    drop(buffered_writer);
+    wait_for_child(pigz_comp, "pigz compression")?;
 
     // Join reader to check for errors and get total count
     let total_reads = match reader_handle.join() {
@@ -277,7 +327,7 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
         h.join().unwrap();
     }
 
-    if cfg.verbose && is_gz {
+    if cfg.verbose && OutputFormat::is_gz(output_path) {
         println!(
             "Output file written (gzip compressed): {}",
             output_path.display()
@@ -422,10 +472,15 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
     drop(hash_tx);
 
     // --- WRITER (this thread) — runs concurrently with reader & workers ---
-    let path_r1 = Path::new(output_r1_path);
-    let path_r2 = Path::new(output_r2_path);
-    let (writer_r1, output_format) = prepare_writer(path_r1, true, cfg.compression_level)?;
-    let (writer_r2, output_format_r2) = prepare_writer(path_r2, true, cfg.compression_level)?;
+    let pigz_comp_threads = if num_workers > 1 {
+        (num_workers / 2).max(1)
+    } else {
+        0
+    };
+    let (writer_r1, output_format, pigz_comp1) =
+        create_output_writer(output_r1_path, cfg.compression_level, pigz_comp_threads)?;
+    let (writer_r2, output_format_r2, pigz_comp2) =
+        create_output_writer(output_r2_path, cfg.compression_level, pigz_comp_threads)?;
 
     if output_format != output_format_r2 {
         bail!("Output files R1 and R2 must have the same format");
@@ -484,6 +539,11 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
         buf_r1.flush()?;
         buf_r2.flush()?;
     }
+    // Drop buffered writers to close pigz stdin pipes before waiting
+    drop(buf_r1);
+    drop(buf_r2);
+    wait_for_child(pigz_comp1, "pigz compression (R1)")?;
+    wait_for_child(pigz_comp2, "pigz compression (R2)")?;
 
     // Join reader to check for errors and get total count
     let total_reads = match reader_handle.join() {
