@@ -1,15 +1,20 @@
 use std::hash::{BuildHasher, Hash};
+use std::io::Read;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result, bail};
 use crossbeam_channel::{Receiver, Sender, bounded};
-use needletail::parse_fastx_file;
+use needletail::parse_fastx_reader;
 use rustc_hash::{FxBuildHasher, FxHashSet};
 
 use crate::hasher::SequenceHasher;
 use crate::utils::{base_read_id, compute_write_buffer_size, validate_format_compatibility};
 use crate::writer::{OutputFormat, prepare_writer, write_fasta_record};
+use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::process::{Child, Command, Stdio};
 
 use super::DedupConfig;
 
@@ -73,10 +78,63 @@ pub(crate) struct HashedPair<T> {
 const CHUNK_SIZE: usize = 4096;
 
 // ==========================================
+// HELPERS
+// ==========================================
+
+/// Open a FASTX input as a byte stream, optionally using pigz for parallel gzip
+/// decompression when `pigz_threads > 1` and the path ends with `.gz`.
+fn open_input_reader(
+    path: &str,
+    pigz_threads: usize,
+) -> Result<(Box<dyn Read + Send + 'static>, Option<Child>)> {
+    if pigz_threads > 1 && path.ends_with(".gz") {
+        match Command::new("pigz")
+            .arg("-d")
+            .arg("-p")
+            .arg(pigz_threads.to_string())
+            .arg("-c")
+            .arg(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(mut child) => {
+                let stdout = child
+                    .stdout
+                    .take()
+                    .expect("Stdio::piped() guarantees stdout is present");
+                return Ok((Box::new(stdout), Some(child)));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // pigz not available — fall through to direct File read
+            }
+            Err(e) => return Err(e).context("Failed to spawn pigz"),
+        }
+    }
+    let file = File::open(path).with_context(|| format!("Failed to open input file: {path}"))?;
+    Ok((Box::new(file), None))
+}
+
+/// Wait on an optional child process and check its exit status.
+fn wait_for_child(child_opt: Option<Child>, label: &str) -> Result<()> {
+    if let Some(mut child) = child_opt {
+        let status = child.wait().context("Failed to wait for child process")?;
+        if !status.success() {
+            bail!("{label} failed with exit code: {:?}", status.code());
+        }
+    }
+    Ok(())
+}
+
+// ==========================================
 // SINGLE-END PARALLEL
 // ==========================================
 
 /// Executes single-end deduplication using a multi-threaded pipeline.
+///
+/// If the input is gzipped and `cfg.threads > 1`, pigz is spawned for parallel
+/// decompression.  Falls back to `needletail`'s built-in reader when pigz is
+/// unavailable.
 pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>(
     input_path: &str,
     output_path: &str,
@@ -87,19 +145,26 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
     let (chunk_tx, chunk_rx): (Sender<Vec<RawRecord>>, Receiver<Vec<RawRecord>>) =
         bounded(num_workers * 2);
     let (hash_tx, hash_rx): (Sender<HashedRecord<T>>, Receiver<HashedRecord<T>>) =
-        bounded(num_workers * 8);
+        crossbeam_channel::unbounded();
+
+    let has_quality_flag = Arc::new(AtomicBool::new(false));
 
     // --- READER THREAD ---
     let reader_handle = std::thread::spawn({
         let chunk_tx = chunk_tx.clone();
         let input_owned = input_path.to_string();
-        move || -> Result<(usize, bool)> {
-            let mut reader = parse_fastx_file(&input_owned).context("Failed to read input file")?;
+        let has_quality_flag = Arc::clone(&has_quality_flag);
+        move || -> Result<usize> {
+            let pigz_threads = num_workers;
+            let (reader, pigz) = open_input_reader(&input_owned, pigz_threads)?;
+            let mut fastx =
+                parse_fastx_reader(reader).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
+
             let mut total = 0;
             let mut has_quality = false;
             let mut chunk = Vec::with_capacity(CHUNK_SIZE);
 
-            while let Some(record) = reader.next() {
+            while let Some(record) = fastx.next() {
                 let rec = record.context("Invalid sequence")?;
                 let id = rec.id().to_vec();
                 let seq = rec.seq().to_vec();
@@ -114,7 +179,8 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
 
                 if chunk.len() >= CHUNK_SIZE {
                     if chunk_tx.send(chunk).is_err() {
-                        return Ok((total, has_quality));
+                        has_quality_flag.store(has_quality, Ordering::Relaxed);
+                        return Ok(total);
                     }
                     chunk = Vec::with_capacity(CHUNK_SIZE);
                 }
@@ -122,7 +188,10 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
             if !chunk.is_empty() {
                 let _ = chunk_tx.send(chunk);
             }
-            Ok((total, has_quality))
+            has_quality_flag.store(has_quality, Ordering::Relaxed);
+
+            wait_for_child(pigz, "pigz decompression")?;
+            Ok(total)
         }
     });
 
@@ -147,16 +216,15 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
     drop(chunk_tx);
     drop(hash_tx);
 
-    // --- WRITER (this thread) ---
-    let (_total_reads, has_quality) = reader_handle.join().unwrap()?;
-
+    // --- WRITER (this thread) — runs concurrently with reader & workers ---
     let output_path = Path::new(output_path);
     let is_gz = OutputFormat::is_gz(output_path);
     let (writer, output_format) = prepare_writer(output_path, true, cfg.compression_level)?;
     let buf_size = compute_write_buffer_size(cfg.read_length);
     let mut buffered_writer = BufWriter::with_capacity(buf_size, writer);
 
-    validate_format_compatibility(has_quality, output_format)?;
+    let output_has_quality = output_format == OutputFormat::Fastq;
+    validate_format_compatibility(output_has_quality, output_format)?;
 
     let mut verifier = ShardedHashVerifier::<T>::new(cfg.estimated_capacity, num_workers);
     let mut duplicates = 0;
@@ -197,6 +265,13 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
         buffered_writer.flush().context("Failed to flush output")?;
     }
 
+    // Join reader to check for errors and get total count
+    let total_reads = match reader_handle.join() {
+        Ok(Ok(count)) => count,
+        Ok(Err(e)) => return Err(e),
+        Err(e) => bail!("Reader thread panicked: {:?}", e),
+    };
+
     // Worker handles must finish since hash_rx closed
     for h in worker_handles {
         h.join().unwrap();
@@ -209,7 +284,7 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
         );
     }
 
-    Ok((processed, duplicates))
+    Ok((total_reads, duplicates))
 }
 
 // ==========================================
@@ -217,6 +292,9 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
 // ==========================================
 
 /// Executes paired-end deduplication using a multi-threaded pipeline.
+///
+/// Both R1 and R2 gzipped inputs are decompressed via pigz in parallel when
+/// `cfg.threads > 1`. Each pigz process gets `max(1, threads/2)` threads.
 pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + 'static>(
     input_r1_path: &str,
     input_r2_path: &str,
@@ -229,16 +307,26 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
     let (chunk_tx, chunk_rx): (Sender<Vec<RawPair>>, Receiver<Vec<RawPair>>) =
         bounded(num_workers * 2);
     let (hash_tx, hash_rx): (Sender<HashedPair<T>>, Receiver<HashedPair<T>>) =
-        bounded(num_workers * 8);
+        crossbeam_channel::unbounded();
+
+    let has_quality_flag = Arc::new(AtomicBool::new(false));
 
     // --- READER THREAD ---
     let reader_handle = std::thread::spawn({
         let chunk_tx = chunk_tx.clone();
         let r1_owned = input_r1_path.to_string();
         let r2_owned = input_r2_path.to_string();
-        move || -> Result<(usize, bool)> {
-            let mut reader_r1 = parse_fastx_file(&r1_owned).context("Failed to read R1")?;
-            let mut reader_r2 = parse_fastx_file(&r2_owned).context("Failed to read R2")?;
+        let has_quality_flag = Arc::clone(&has_quality_flag);
+        move || -> Result<usize> {
+            // Each file gets half the available threads for decompression
+            let pigz_threads = (num_workers / 2).max(1);
+            let (reader1, pigz1) = open_input_reader(&r1_owned, pigz_threads)?;
+            let (reader2, pigz2) = open_input_reader(&r2_owned, pigz_threads)?;
+
+            let mut reader_r1 =
+                parse_fastx_reader(reader1).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
+            let mut reader_r2 =
+                parse_fastx_reader(reader2).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
 
             let mut total = 0;
             let mut has_quality = false;
@@ -249,6 +337,7 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
                 let r2 = match reader_r2.next() {
                     Some(r) => r.context("Invalid R2 sequence")?,
                     None => {
+                        has_quality_flag.store(has_quality, Ordering::Relaxed);
                         bail!("Desynchronization: R1 has more records than R2");
                     }
                 };
@@ -257,6 +346,7 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
                 let base_r1 = base_read_id(r1.id()).to_vec();
                 let base_r2 = base_read_id(r2.id()).to_vec();
                 if base_r1 != base_r2 {
+                    has_quality_flag.store(has_quality, Ordering::Relaxed);
                     bail!(
                         "Desynchronization: R1 base ID {:?} != R2 base ID {:?}",
                         String::from_utf8_lossy(&base_r1),
@@ -286,7 +376,8 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
 
                 if chunk.len() >= CHUNK_SIZE {
                     if chunk_tx.send(chunk).is_err() {
-                        return Ok((total, has_quality));
+                        has_quality_flag.store(has_quality, Ordering::Relaxed);
+                        return Ok(total);
                     }
                     chunk = Vec::with_capacity(CHUNK_SIZE);
                 }
@@ -294,13 +385,19 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
 
             // Check for R2 having extra records
             if reader_r2.next().is_some() {
+                has_quality_flag.store(has_quality, Ordering::Relaxed);
                 bail!("Desynchronization: R2 has more records than R1");
             }
 
             if !chunk.is_empty() {
                 let _ = chunk_tx.send(chunk);
             }
-            Ok((total, has_quality))
+            has_quality_flag.store(has_quality, Ordering::Relaxed);
+
+            // Wait for both pigz processes to finish
+            wait_for_child(pigz1, "pigz decompression (R1)")?;
+            wait_for_child(pigz2, "pigz decompression (R2)")?;
+            Ok(total)
         }
     });
 
@@ -324,13 +421,7 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
     drop(chunk_tx);
     drop(hash_tx);
 
-    // --- WRITER (this thread) ---
-    let (_total_reads, has_quality) = match reader_handle.join() {
-        Ok(Ok(result)) => result,
-        Ok(Err(e)) => return Err(e),
-        Err(e) => bail!("Reader thread panicked: {:?}", e),
-    };
-
+    // --- WRITER (this thread) — runs concurrently with reader & workers ---
     let path_r1 = Path::new(output_r1_path);
     let path_r2 = Path::new(output_r2_path);
     let (writer_r1, output_format) = prepare_writer(path_r1, true, cfg.compression_level)?;
@@ -344,7 +435,8 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
     let mut buf_r1 = BufWriter::with_capacity(buf_size, writer_r1);
     let mut buf_r2 = BufWriter::with_capacity(buf_size, writer_r2);
 
-    validate_format_compatibility(has_quality, output_format)?;
+    let output_has_quality = output_format == OutputFormat::Fastq;
+    validate_format_compatibility(output_has_quality, output_format)?;
 
     let mut verifier = ShardedHashVerifier::<T>::new(cfg.estimated_capacity, num_workers);
     let mut duplicates = 0;
@@ -393,11 +485,18 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
         buf_r2.flush()?;
     }
 
+    // Join reader to check for errors and get total count
+    let total_reads = match reader_handle.join() {
+        Ok(Ok(count)) => count,
+        Ok(Err(e)) => return Err(e),
+        Err(e) => bail!("Reader thread panicked: {:?}", e),
+    };
+
     for h in worker_handles {
         h.join().unwrap();
     }
 
-    Ok((processed, duplicates))
+    Ok((total_reads, duplicates))
 }
 
 // ==========================================
