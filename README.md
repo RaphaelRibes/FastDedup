@@ -16,6 +16,10 @@ Paper in preparation, you can check it [here](https://gitlab.etu.umontpellier.fr
 
 - **Fast & Memory Efficient**: Uses zero-allocation sequence parsing and a non-cryptographic high-speed hashing cache, which automatically scales based on the estimated input file size.
 - **Supports Compressed Formats**: Transparently reads both uncompressed and GZIP compressed (`.gz`) FASTQ/FASTA files. Writes to both uncompressed and GZIP compressed formats.
+- **OOM-Safe Allocations**: All internal hash tables use `try_reserve` to detect out-of-memory conditions and return a clear error instead of panicking silently.
+- **Abundance Tracking** (`--abundance`): Counts occurrences of each unique sequence and annotates the output header with `;size=N`. The second pass can be accelerated with `--temp-dir` to avoid re-decompressing the input gzip.
+- **Multi-Threaded Mode** (`--threads` / `-j`): Parallel hashing and writing pipeline using a producer/consumer pattern with crossbeam channels, plus in-process gzip compression via gzippy (no subprocess dependency).
+- **Pre-Counting** (`--pre-count`): Scans the input first to obtain the exact sequence count, giving the hash table a perfect capacity estimate — avoids resize-induced memory spikes and reduces peak RAM by up to 32%.
 - **Incremental Deduplication & Auto-Recovery**: By default, FDedup appends new sequences to an existing uncompressed output file. It safely pre-loads existing hashes to prevent duplicates. If an uncompressed output file is corrupted due to a previous crash, FDedup automatically truncates it to the last valid sequence and resumes safely.
 
 ## Installation
@@ -54,6 +58,11 @@ fdedup [OPTIONS] --input <INPUT>
 - `-H, --hash <HASH>`: Manually specify hash size (64 or 128 bits).
 - `-c, --compression <LEVEL>`: GZIP compression level, 1–9 (default: 6).
 - `-P, --read-length <LENGTH>`: Expected read length in base pairs, used to tune I/O buffers (default: 150).
+- `-j, --threads <N>`: Number of threads for parallel processing (0 = auto-detect, default: 1).
+- `--abundance`: Enable abundance tracking mode — annotate output headers with `;size=N`.
+- `--abundance-sep <SEP>`: Separator for abundance annotation (default: `;size=`).
+- `--pre-count`: Pre-count sequences for exact hash table sizing (reduces peak RAM).
+- `--temp-dir <DIR>`: Directory for temp file in abundance mode (avoids re-reading gzip).
 
 1: The probability $p$ of having at least one collision is calculated as $p= \frac{x^2}{2 \cdot 2^{64}}$ where $x$ is the estimated number of hashes.
 If the probability is higher than the specified threshold, FDedup will automatically switch to 128-bit hashing to nullify the risk of collisions.
@@ -131,8 +140,8 @@ However, if you output to an uncompressed format, FDedup will automatically dete
 ## To-Do List
 
 - [x] Support for **Paired-End read deduplication**.
-- [ ] Add **Multithreading** to parallelize sequence hashing and processing.
-- [ ] Support tracking sequence **abundances** (counts) instead of naive discarding.
+- [x] Add **Multithreading** to parallelize sequence hashing and processing.
+- [x] Support tracking sequence **abundances** (counts) instead of naive discarding.
 - [x] Add a possibility for exporting sequences as **FASTA**.
 - [x] Improve error handling.
 
