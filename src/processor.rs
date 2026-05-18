@@ -28,6 +28,17 @@ pub(crate) struct DedupConfig {
     pub abundance_sep: String,
     /// Number of parallel workers for multi-threaded mode (1 = single-threaded).
     pub threads: usize,
+    /// When `Some`, abundance mode uses a temp file in this directory to avoid
+    /// re-decompressing the input gzip in the second pass.
+    pub temp_dir: Option<String>,
+}
+
+/// Owned snapshot of a sequence record, used to break needletail's borrow
+/// chain when the same reader needs to be advanced multiple times.
+struct OwnedRecord {
+    id: Vec<u8>,
+    seq: Vec<u8>,
+    qual: Option<Vec<u8>>,
 }
 
 // ==========================================
@@ -40,7 +51,7 @@ pub(crate) fn execute_deduplication<T: SequenceHasher + 'static>(
     output_path: &str,
     cfg: &DedupConfig,
 ) -> Result<(usize, usize)> {
-    let mut verifier = HashVerifier::<T>::new(cfg.estimated_capacity);
+    let mut verifier = HashVerifier::<T>::new(cfg.estimated_capacity)?;
 
     if cfg.dry_run {
         if cfg.verbose {
@@ -166,7 +177,7 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
     output_r2_path: &str,
     cfg: &DedupConfig,
 ) -> Result<(usize, usize)> {
-    let mut verifier = HashVerifier::<T>::new(cfg.estimated_capacity);
+    let mut verifier = HashVerifier::<T>::new(cfg.estimated_capacity)?;
 
     let mut reader_r1 = parse_fastx_file(input_r1_path).context("Failed to read R1")?;
     let mut reader_r2 = parse_fastx_file(input_r2_path).context("Failed to read R2")?;
@@ -383,62 +394,102 @@ pub(crate) fn execute_paired_deduplication<T: SequenceHasher + 'static>(
 
 /// Executes abundance-tracking deduplication for single-end reads.
 ///
-/// Two-pass strategy:
-///   1. First pass: hash every sequence, count occurrences.
-///   2. Second pass: write unique sequences with `;size=N` in the header.
+/// Two-pass strategy. When `cfg.temp_dir` is set, the first pass writes unique
+/// records to an uncompressed temp file so the second pass avoids re-decompressing
+/// the input gzip — trading disk I/O for CPU time.
 pub(crate) fn execute_deduplication_with_abundance<T: SequenceHasher + 'static>(
     input_path: &str,
     output_path: &str,
     cfg: &DedupConfig,
 ) -> Result<(usize, usize)> {
-    // --- FIRST PASS: count abundances ---
-    let mut tracker = AbundanceTracker::<T>::new(cfg.estimated_capacity);
+    let mut tracker = AbundanceTracker::<T>::new(cfg.estimated_capacity)?;
     let mut total_reads = 0;
 
-    {
-        let mut reader = parse_fastx_file(input_path).context("Failed to read input file")?;
+    if let Some(ref temp_dir) = cfg.temp_dir {
+        // === TEMP FILE PATH (first pass writes to disk, second pass reads raw) ===
+
+        // --- PASS 1: count abundances + write unique records to temp file ---
+        let temp_path = std::path::Path::new(temp_dir)
+            .join(format!("fdedup_abundance_{}.fastq", std::process::id()));
+        let temp_file = fs::File::create(&temp_path)
+            .with_context(|| format!("Failed to create temp: {temp_path:?}"))?;
+        let mut temp_writer = BufWriter::with_capacity(256 * 1024, temp_file);
+
+        {
+            let mut reader = parse_fastx_file(input_path).context("Failed to read input file")?;
+            let mut is_fastq = false;
+            let mut format_detected = false;
+
+            while let Some(record) = reader.next() {
+                let seq_record = record.context("Invalid sequence data")?;
+
+                if !format_detected {
+                    is_fastq = seq_record.qual().is_some_and(|q| !q.is_empty());
+                    format_detected = true;
+                }
+
+                let seq = seq_record.seq();
+                let hash = T::hash_sequence(&seq);
+                let (is_first, _) = tracker.track(hash);
+                total_reads += 1;
+
+                if is_first {
+                    if is_fastq {
+                        let qual = seq_record.qual().unwrap_or(&[]);
+                        temp_writer.write_all(b"@")?;
+                        temp_writer.write_all(seq_record.id())?;
+                        temp_writer.write_all(b"\n")?;
+                        temp_writer.write_all(&seq)?;
+                        temp_writer.write_all(b"\n+\n")?;
+                        temp_writer.write_all(qual)?;
+                        temp_writer.write_all(b"\n")?;
+                    } else {
+                        temp_writer.write_all(b">")?;
+                        temp_writer.write_all(seq_record.id())?;
+                        temp_writer.write_all(b"\n")?;
+                        temp_writer.write_all(&seq)?;
+                        temp_writer.write_all(b"\n")?;
+                    }
+                }
+            }
+        }
+
+        temp_writer.flush().context("Failed to flush temp file")?;
+        drop(temp_writer);
+
+        if cfg.verbose {
+            println!(
+                "Abundance tracking: {} unique / {} total reads (temp: {:?})",
+                tracker.len(),
+                total_reads,
+                temp_path
+            );
+        }
+
+        // --- PASS 2: read temp file (raw, no decompression) ---
+        let output_path_bound = Path::new(output_path);
+        let (writer, output_format) = prepare_writer(output_path_bound, true, cfg.compression_level)?;
+        let buf_size = compute_write_buffer_size(cfg.read_length);
+        let mut buffered_writer = BufWriter::with_capacity(buf_size, writer);
+
+        let sep = cfg.abundance_sep.as_bytes();
+        let temp_path_str = temp_path.to_string_lossy().to_string();
+        let mut reader = parse_fastx_file(&temp_path_str).context("Failed to read temp file")?;
+        let mut format_validated = false;
+
         while let Some(record) = reader.next() {
-            let seq_record = record.context("Invalid sequence data")?;
+            let seq_record = record.context("Invalid sequence data in temp file")?;
+
+            if !format_validated {
+                let has_quality = seq_record.qual().is_some_and(|q| !q.is_empty());
+                validate_format_compatibility(has_quality, output_format)?;
+                format_validated = true;
+            }
+
             let seq = seq_record.seq();
             let hash = T::hash_sequence(&seq);
-            tracker.track(hash);
-            total_reads += 1;
-        }
-    }
+            let count = tracker.get_count(hash);
 
-    // --- SECOND PASS: write unique sequences with abundance annotation ---
-    let output_path_bound = Path::new(output_path);
-    let (writer, output_format) = prepare_writer(output_path_bound, true, cfg.compression_level)?;
-    let buf_size = compute_write_buffer_size(cfg.read_length);
-    let mut buffered_writer = BufWriter::with_capacity(buf_size, writer);
-
-    if cfg.verbose {
-        println!(
-            "Abundance tracking: {} unique / {} total reads (second pass)",
-            tracker.len(),
-            total_reads
-        );
-    }
-
-    let sep = cfg.abundance_sep.as_bytes();
-    let mut reader = parse_fastx_file(input_path).context("Failed to read input file")?;
-    let mut duplicates = 0;
-    let mut format_validated = false;
-
-    while let Some(record) = reader.next() {
-        let seq_record = record.context("Invalid sequence data")?;
-
-        if !format_validated {
-            let has_quality = seq_record.qual().is_some_and(|q| !q.is_empty());
-            validate_format_compatibility(has_quality, output_format)?;
-            format_validated = true;
-        }
-
-        let seq = seq_record.seq();
-        let hash = T::hash_sequence(&seq);
-        let (is_first, count) = tracker.track(hash);
-
-        if is_first {
             match output_format {
                 OutputFormat::Fasta => {
                     write_fasta_record_with_abundance(
@@ -461,16 +512,96 @@ pub(crate) fn execute_deduplication_with_abundance<T: SequenceHasher + 'static>(
                     )?;
                 }
             }
-        } else {
-            duplicates += 1;
         }
+
+        buffered_writer
+            .flush()
+            .context("Failed to flush output buffer")?;
+
+        let _ = fs::remove_file(&temp_path);
+        Ok((total_reads, 0))
+
+    } else {
+        // === CLASSIC PATH (re-read input gzip for second pass) ===
+
+        // --- PASS 1: count abundances only ---
+        {
+            let mut reader = parse_fastx_file(input_path).context("Failed to read input file")?;
+            while let Some(record) = reader.next() {
+                let seq_record = record.context("Invalid sequence data")?;
+                let seq = seq_record.seq();
+                let hash = T::hash_sequence(&seq);
+                tracker.track(hash);
+                total_reads += 1;
+            }
+        }
+
+        // --- PASS 2: re-read gzip, annotate with abundance ---
+        let output_path_bound = Path::new(output_path);
+        let (writer, output_format) = prepare_writer(output_path_bound, true, cfg.compression_level)?;
+        let buf_size = compute_write_buffer_size(cfg.read_length);
+        let mut buffered_writer = BufWriter::with_capacity(buf_size, writer);
+
+        if cfg.verbose {
+            println!(
+                "Abundance tracking: {} unique / {} total reads (re-reading input)",
+                tracker.len(),
+                total_reads
+            );
+        }
+
+        let sep = cfg.abundance_sep.as_bytes();
+        let mut reader = parse_fastx_file(input_path).context("Failed to read input file")?;
+        let mut duplicates = 0;
+        let mut format_validated = false;
+
+        while let Some(record) = reader.next() {
+            let seq_record = record.context("Invalid sequence data")?;
+
+            if !format_validated {
+                let has_quality = seq_record.qual().is_some_and(|q| !q.is_empty());
+                validate_format_compatibility(has_quality, output_format)?;
+                format_validated = true;
+            }
+
+            let seq = seq_record.seq();
+            let hash = T::hash_sequence(&seq);
+            let (is_first, count) = tracker.track(hash);
+
+            if is_first {
+                match output_format {
+                    OutputFormat::Fasta => {
+                        write_fasta_record_with_abundance(
+                            &mut buffered_writer,
+                            seq_record.id(),
+                            &seq,
+                            count,
+                            sep,
+                        )?;
+                    }
+                    OutputFormat::Fastq => {
+                        let qual = seq_record.qual().unwrap_or(&[]);
+                        write_fastq_record_with_abundance(
+                            &mut buffered_writer,
+                            seq_record.id(),
+                            &seq,
+                            qual,
+                            count,
+                            sep,
+                        )?;
+                    }
+                }
+            } else {
+                duplicates += 1;
+            }
+        }
+
+        buffered_writer
+            .flush()
+            .context("Failed to flush output buffer")?;
+
+        Ok((total_reads, duplicates))
     }
-
-    buffered_writer
-        .flush()
-        .context("Failed to flush output buffer")?;
-
-    Ok((total_reads, duplicates))
 }
 
 // ==========================================
@@ -479,9 +610,9 @@ pub(crate) fn execute_deduplication_with_abundance<T: SequenceHasher + 'static>(
 
 /// Executes abundance-tracking deduplication for paired-end reads.
 ///
-/// Two-pass strategy:
-///   1. First pass: hash every pair, count occurrences.
-///   2. Second pass: write unique pairs with `;size=N` in both headers.
+/// Two-pass strategy. When `cfg.temp_dir` is set, the first pass writes unique
+/// pairs to an uncompressed temp file so the second pass avoids re-decompressing
+/// the input gzip — trading disk I/O for CPU time.
 pub(crate) fn execute_paired_deduplication_with_abundance<T: SequenceHasher + 'static>(
     input_r1_path: &str,
     input_r2_path: &str,
@@ -489,116 +620,308 @@ pub(crate) fn execute_paired_deduplication_with_abundance<T: SequenceHasher + 's
     output_r2_path: &str,
     cfg: &DedupConfig,
 ) -> Result<(usize, usize)> {
-    // --- FIRST PASS: count abundances ---
-    let mut tracker = AbundanceTracker::<T>::new(cfg.estimated_capacity);
-    let total_reads: usize;
+    let mut tracker = AbundanceTracker::<T>::new(cfg.estimated_capacity)?;
+    let mut total_reads = 0;
 
-    {
-        let mut reader_r1 = parse_fastx_file(input_r1_path).context("Failed to read R1")?;
-        let mut reader_r2 = parse_fastx_file(input_r2_path).context("Failed to read R2")?;
-        let mut count = 0;
+    if let Some(ref temp_dir) = cfg.temp_dir {
+        // === TEMP FILE PATH ===
 
-        while let (Some(r1_res), Some(r2_res)) = (reader_r1.next(), reader_r2.next()) {
-            let seq_r1 = r1_res.context("Invalid sequence in R1")?;
-            let seq_r2 = r2_res.context("Invalid sequence in R2")?;
-            let combined_hash = T::hash_pair(&seq_r1.seq(), &seq_r2.seq());
-            tracker.track(combined_hash);
-            count += 1;
-        }
-        total_reads = count;
-    }
+        // --- PASS 1: count abundances + write unique pairs to temp file ---
+        let temp_path = std::path::Path::new(temp_dir)
+            .join(format!("fdedup_abundance_{}.fastq", std::process::id()));
+        let temp_file = fs::File::create(&temp_path)
+            .with_context(|| format!("Failed to create temp: {temp_path:?}"))?;
+        let mut temp_writer = BufWriter::with_capacity(256 * 1024, temp_file);
 
-    // --- SECOND PASS: write unique pairs with abundance annotation ---
-    let path_r1_bound = Path::new(output_r1_path);
-    let path_r2_bound = Path::new(output_r2_path);
+        {
+            let mut reader_r1 = parse_fastx_file(input_r1_path).context("Failed to read R1")?;
+            let mut reader_r2 = parse_fastx_file(input_r2_path).context("Failed to read R2")?;
+            let mut is_fastq = false;
+            let mut format_detected = false;
 
-    let (writer_r1, output_format_r1) = prepare_writer(path_r1_bound, true, cfg.compression_level)?;
-    let (writer_r2, output_format_r2) = prepare_writer(path_r2_bound, true, cfg.compression_level)?;
+            while let (Some(r1_res), Some(r2_res)) = (reader_r1.next(), reader_r2.next()) {
+                let seq_r1 = r1_res.context("Invalid sequence in R1")?;
 
-    if output_format_r1 != output_format_r2 {
-        bail!("Output files R1 and R2 must have the same format (FASTA or FASTQ)");
-    }
+                if !format_detected {
+                    is_fastq = seq_r1.qual().is_some_and(|q| !q.is_empty());
+                    format_detected = true;
+                }
 
-    let buf_size = compute_write_buffer_size(cfg.read_length);
-    let mut buf_writer_r1 = BufWriter::with_capacity(buf_size, writer_r1);
-    let mut buf_writer_r2 = BufWriter::with_capacity(buf_size, writer_r2);
+                let seq_r2 = r2_res.context("Invalid sequence in R2")?;
+                let combined_hash = T::hash_pair(&seq_r1.seq(), &seq_r2.seq());
+                let (is_first, _) = tracker.track(combined_hash);
+                total_reads += 1;
 
-    if cfg.verbose {
-        println!(
-            "Abundance tracking: {} unique / {total_reads} pairs (second pass)",
-            tracker.len()
-        );
-    }
-
-    let sep = cfg.abundance_sep.as_bytes();
-    let mut reader_r1 = parse_fastx_file(input_r1_path).context("Failed to read R1")?;
-    let mut reader_r2 = parse_fastx_file(input_r2_path).context("Failed to read R2")?;
-    let mut duplicates = 0;
-    let mut format_validated = false;
-
-    while let (Some(r1_res), Some(r2_res)) = (reader_r1.next(), reader_r2.next()) {
-        let seq_r1 = r1_res.context("Invalid sequence in R1")?;
-        let seq_r2 = r2_res.context("Invalid sequence in R2")?;
-
-        if !format_validated {
-            let has_quality = seq_r1.qual().is_some_and(|q| !q.is_empty());
-            validate_format_compatibility(has_quality, output_format_r1)?;
-            format_validated = true;
+                if is_first {
+                    write_paired_record(&mut temp_writer, &seq_r1, &seq_r2, is_fastq)?;
+                }
+            }
         }
 
-        let combined_hash = T::hash_pair(&seq_r1.seq(), &seq_r2.seq());
-        let (is_first, count) = tracker.track(combined_hash);
+        temp_writer.flush().context("Failed to flush temp file")?;
+        drop(temp_writer);
 
-        if is_first {
+        if cfg.verbose {
+            println!(
+                "Abundance tracking: {} unique / {total_reads} pairs (temp: {:?})",
+                tracker.len(),
+                temp_path
+            );
+        }
+
+        // --- PASS 2: read temp file in pairs, annotate with abundance ---
+        let path_r1_bound = Path::new(output_r1_path);
+        let path_r2_bound = Path::new(output_r2_path);
+
+        let (writer_r1, output_format_r1) = prepare_writer(path_r1_bound, true, cfg.compression_level)?;
+        let (writer_r2, output_format_r2) = prepare_writer(path_r2_bound, true, cfg.compression_level)?;
+
+        if output_format_r1 != output_format_r2 {
+            bail!("Output files R1 and R2 must have the same format (FASTA or FASTQ)");
+        }
+
+        let buf_size = compute_write_buffer_size(cfg.read_length);
+        let mut buf_writer_r1 = BufWriter::with_capacity(buf_size, writer_r1);
+        let mut buf_writer_r2 = BufWriter::with_capacity(buf_size, writer_r2);
+
+        let sep = cfg.abundance_sep.as_bytes();
+        let temp_path_str = temp_path.to_string_lossy().to_string();
+        let mut reader = parse_fastx_file(&temp_path_str).context("Failed to read temp file")?;
+        let mut format_validated = false;
+
+        // Temp file is interleaved: R1,R2,R1,R2...
+        // Extract owned data to avoid borrow conflicts.
+        loop {
+            let r1_data = match reader.next() {
+                Some(r) => {
+                    let rec = r.context("Invalid R1 in temp file")?;
+                    OwnedRecord {
+                        id: rec.id().to_vec(),
+                        seq: rec.seq().to_vec(),
+                        qual: rec.qual().map(|q| q.to_vec()),
+                    }
+                }
+                None => break,
+            };
+            let r2_data = match reader.next() {
+                Some(r) => {
+                    let rec = r.context("Invalid R2 in temp file")?;
+                    OwnedRecord {
+                        id: rec.id().to_vec(),
+                        seq: rec.seq().to_vec(),
+                        qual: rec.qual().map(|q| q.to_vec()),
+                    }
+                }
+                None => bail!("Desynchronization in temp file: odd number of records"),
+            };
+
+            if !format_validated {
+                let has_quality = r1_data.qual.is_some();
+                validate_format_compatibility(has_quality, output_format_r1)?;
+                format_validated = true;
+            }
+
+            let combined_hash = T::hash_pair(&r1_data.seq, &r2_data.seq);
+            let count = tracker.get_count(combined_hash);
+
             match output_format_r1 {
                 OutputFormat::Fasta => {
                     write_fasta_record_with_abundance(
                         &mut buf_writer_r1,
-                        seq_r1.id(),
-                        &seq_r1.seq(),
+                        &r1_data.id,
+                        &r1_data.seq,
                         count,
                         sep,
                     )?;
                     write_fasta_record_with_abundance(
                         &mut buf_writer_r2,
-                        seq_r2.id(),
-                        &seq_r2.seq(),
+                        &r2_data.id,
+                        &r2_data.seq,
                         count,
                         sep,
                     )?;
                 }
                 OutputFormat::Fastq => {
-                    let qual_r1 = seq_r1.qual().unwrap_or(&[]);
-                    let qual_r2 = seq_r2.qual().unwrap_or(&[]);
+                    let qual_r1 = r1_data.qual.as_deref().unwrap_or(&[]);
+                    let qual_r2 = r2_data.qual.as_deref().unwrap_or(&[]);
                     write_fastq_record_with_abundance(
                         &mut buf_writer_r1,
-                        seq_r1.id(),
-                        &seq_r1.seq(),
+                        &r1_data.id,
+                        &r1_data.seq,
                         qual_r1,
                         count,
                         sep,
                     )?;
                     write_fastq_record_with_abundance(
                         &mut buf_writer_r2,
-                        seq_r2.id(),
-                        &seq_r2.seq(),
+                        &r2_data.id,
+                        &r2_data.seq,
                         qual_r2,
                         count,
                         sep,
                     )?;
                 }
             }
-        } else {
-            duplicates += 1;
         }
+
+        buf_writer_r1
+            .flush()
+            .context("Failed to flush R1 output buffer")?;
+        buf_writer_r2
+            .flush()
+            .context("Failed to flush R2 output buffer")?;
+
+        let _ = fs::remove_file(&temp_path);
+        Ok((total_reads, 0))
+
+    } else {
+        // === CLASSIC PATH (re-read input gzip for second pass) ===
+
+        // --- PASS 1: count abundances only ---
+        {
+            let mut reader_r1 = parse_fastx_file(input_r1_path).context("Failed to read R1")?;
+            let mut reader_r2 = parse_fastx_file(input_r2_path).context("Failed to read R2")?;
+
+            while let (Some(r1_res), Some(r2_res)) = (reader_r1.next(), reader_r2.next()) {
+                let seq_r1 = r1_res.context("Invalid sequence in R1")?;
+                let seq_r2 = r2_res.context("Invalid sequence in R2")?;
+                let combined_hash = T::hash_pair(&seq_r1.seq(), &seq_r2.seq());
+                tracker.track(combined_hash);
+                total_reads += 1;
+            }
+        }
+
+        // --- PASS 2: re-read gzip, annotate with abundance ---
+        let path_r1_bound = Path::new(output_r1_path);
+        let path_r2_bound = Path::new(output_r2_path);
+
+        let (writer_r1, output_format_r1) = prepare_writer(path_r1_bound, true, cfg.compression_level)?;
+        let (writer_r2, output_format_r2) = prepare_writer(path_r2_bound, true, cfg.compression_level)?;
+
+        if output_format_r1 != output_format_r2 {
+            bail!("Output files R1 and R2 must have the same format (FASTA or FASTQ)");
+        }
+
+        let buf_size = compute_write_buffer_size(cfg.read_length);
+        let mut buf_writer_r1 = BufWriter::with_capacity(buf_size, writer_r1);
+        let mut buf_writer_r2 = BufWriter::with_capacity(buf_size, writer_r2);
+
+        if cfg.verbose {
+            println!(
+                "Abundance tracking: {} unique / {total_reads} pairs (re-reading input)",
+                tracker.len()
+            );
+        }
+
+        let sep = cfg.abundance_sep.as_bytes();
+        let mut reader_r1 = parse_fastx_file(input_r1_path).context("Failed to read R1")?;
+        let mut reader_r2 = parse_fastx_file(input_r2_path).context("Failed to read R2")?;
+        let mut duplicates = 0;
+        let mut format_validated = false;
+
+        while let (Some(r1_res), Some(r2_res)) = (reader_r1.next(), reader_r2.next()) {
+            let seq_r1 = r1_res.context("Invalid sequence in R1")?;
+            let seq_r2 = r2_res.context("Invalid sequence in R2")?;
+
+            if !format_validated {
+                let has_quality = seq_r1.qual().is_some_and(|q| !q.is_empty());
+                validate_format_compatibility(has_quality, output_format_r1)?;
+                format_validated = true;
+            }
+
+            let combined_hash = T::hash_pair(&seq_r1.seq(), &seq_r2.seq());
+            let (is_first, count) = tracker.track(combined_hash);
+
+            if is_first {
+                match output_format_r1 {
+                    OutputFormat::Fasta => {
+                        write_fasta_record_with_abundance(
+                            &mut buf_writer_r1,
+                            seq_r1.id(),
+                            &seq_r1.seq(),
+                            count,
+                            sep,
+                        )?;
+                        write_fasta_record_with_abundance(
+                            &mut buf_writer_r2,
+                            seq_r2.id(),
+                            &seq_r2.seq(),
+                            count,
+                            sep,
+                        )?;
+                    }
+                    OutputFormat::Fastq => {
+                        let qual_r1 = seq_r1.qual().unwrap_or(&[]);
+                        let qual_r2 = seq_r2.qual().unwrap_or(&[]);
+                        write_fastq_record_with_abundance(
+                            &mut buf_writer_r1,
+                            seq_r1.id(),
+                            &seq_r1.seq(),
+                            qual_r1,
+                            count,
+                            sep,
+                        )?;
+                        write_fastq_record_with_abundance(
+                            &mut buf_writer_r2,
+                            seq_r2.id(),
+                            &seq_r2.seq(),
+                            qual_r2,
+                            count,
+                            sep,
+                        )?;
+                    }
+                }
+            } else {
+                duplicates += 1;
+            }
+        }
+
+        buf_writer_r1
+            .flush()
+            .context("Failed to flush R1 output buffer")?;
+        buf_writer_r2
+            .flush()
+            .context("Failed to flush R2 output buffer")?;
+
+        Ok((total_reads, duplicates))
     }
+}
 
-    buf_writer_r1
-        .flush()
-        .context("Failed to flush R1 output buffer")?;
-    buf_writer_r2
-        .flush()
-        .context("Failed to flush R2 output buffer")?;
-
-    Ok((total_reads, duplicates))
+/// Helper: write a pair of records (R1 then R2) to a temp file in raw FASTQ/FASTA.
+fn write_paired_record(
+    writer: &mut impl Write,
+    r1: &needletail::parser::SequenceRecord,
+    r2: &needletail::parser::SequenceRecord,
+    is_fastq: bool,
+) -> Result<()> {
+    if is_fastq {
+        let qual_r1 = r1.qual().unwrap_or(&[]);
+        let qual_r2 = r2.qual().unwrap_or(&[]);
+        writer.write_all(b"@")?;
+        writer.write_all(r1.id())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(&r1.seq())?;
+        writer.write_all(b"\n+\n")?;
+        writer.write_all(qual_r1)?;
+        writer.write_all(b"\n")?;
+        writer.write_all(b"@")?;
+        writer.write_all(r2.id())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(&r2.seq())?;
+        writer.write_all(b"\n+\n")?;
+        writer.write_all(qual_r2)?;
+        writer.write_all(b"\n")?;
+    } else {
+        writer.write_all(b">")?;
+        writer.write_all(r1.id())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(&r1.seq())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(b">")?;
+        writer.write_all(r2.id())?;
+        writer.write_all(b"\n")?;
+        writer.write_all(&r2.seq())?;
+        writer.write_all(b"\n")?;
+    }
+    Ok(())
 }

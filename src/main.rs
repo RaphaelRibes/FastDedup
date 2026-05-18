@@ -252,6 +252,7 @@ fn main() -> Result<()> {
         read_length: args.read_length,
         abundance_sep: args.abundance_sep.clone(),
         threads: args.threads,
+        temp_dir: args.temp_dir.clone(),
     };
 
     let start = Instant::now();

@@ -59,6 +59,13 @@ impl<T: Hash + Eq> AbundanceTracker<T> {
         (count == 1, count)
     }
 
+    /// Returns the abundance count for `hash` without mutating the tracker.
+    /// Use this in the second pass of abundance mode to retrieve the final count.
+    #[inline]
+    pub fn get_count(&self, hash: T) -> u32 {
+        self.counts.get(&hash).copied().unwrap_or(0)
+    }
+
     /// Returns the number of unique sequences tracked.
     pub fn len(&self) -> usize {
         self.counts.len()
