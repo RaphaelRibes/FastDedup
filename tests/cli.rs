@@ -1625,3 +1625,145 @@ fn test_paire_reprise_synchronisation_r1_r2() {
         );
     }
 }
+
+// ================================================================
+// TESTS — VALIDATION DES SORTIES .GZ
+// ================================================================
+
+/// Vérifie qu'une sortie .gz en mode SE a les bons magic bytes et contient
+/// le bon nombre de séquences après décompression.
+#[test]
+fn test_validation_sortie_gz_single_end() {
+    let temp_dir = assert_fs::TempDir::new().unwrap();
+    let entree = generer_fastq(&temp_dir, "entree.fastq", 20, 5);
+    let sortie = temp_dir.child("sortie.fastq.gz");
+
+    cmd()
+        .arg("-1").arg(entree.path())
+        .arg("-o").arg(sortie.path())
+        .arg("--threads").arg("4")
+        .assert().success();
+
+    // Vérifier les magic bytes gzip (0x1f 0x8b)
+    let octets = fs::read(sortie.path()).unwrap();
+    assert_eq!(octets[0], 0x1f, "Premier octet doit être le magic byte gzip 0x1f");
+    assert_eq!(octets[1], 0x8b, "Second octet doit être le magic byte gzip 0x8b");
+
+    // Vérifier que flate2 peut décompresser
+    let contenu = decompresser_gz(sortie.path());
+    let count = compter_sequences_fastq(&contenu);
+    assert_eq!(count, 20, "Sortie .gz doit contenir 20 séquences uniques");
+}
+
+/// Vérifie qu'une sortie .gz en mode multi-thread est valide et
+/// que le compte de séquences est correct.
+#[test]
+fn test_validation_sortie_gz_threads_multiple() {
+    let temp_dir = assert_fs::TempDir::new().unwrap();
+
+    for threads in &[2usize, 4, 8] {
+        let entree = generer_fastq(&temp_dir, &format!("entree_t{threads}.fastq"), 50, 10);
+        let sortie = temp_dir.child(&format!("sortie_t{threads}.fastq.gz"));
+
+        cmd()
+            .arg("-1").arg(entree.path())
+            .arg("-o").arg(sortie.path())
+            .arg("--threads").arg(threads.to_string())
+            .assert().success();
+
+        // Magic bytes
+        let octets = fs::read(sortie.path()).unwrap();
+        assert_eq!(octets[0], 0x1f, "threads={threads}: magic byte gzip");
+        assert_eq!(octets[1], 0x8b, "threads={threads}: magic byte gzip");
+
+        // Décompresser avec flate2 et vérifier le contenu
+        let contenu = decompresser_gz(sortie.path());
+        let count = compter_sequences_fastq(&contenu);
+        assert_eq!(
+            count, 50,
+            "threads={threads}: sortie .gz doit contenir 50 séquences uniques"
+        );
+    }
+}
+
+/// Vérifie qu'une sortie .gz en mode PE est valide, que R1 et R2 sont
+/// synchronisés et que le contenu est correct.
+#[test]
+fn test_validation_sortie_gz_paired_end() {
+    let temp_dir = assert_fs::TempDir::new().unwrap();
+    let (r1, r2) = generer_fastq_paire(&temp_dir, "R1.fastq", "R2.fastq", 30, 8);
+    let sortie_r1 = temp_dir.child("sortie_R1.fastq.gz");
+    let sortie_r2 = temp_dir.child("sortie_R2.fastq.gz");
+
+    cmd()
+        .arg("-1").arg(r1.path())
+        .arg("-2").arg(r2.path())
+        .arg("-o").arg(sortie_r1.path())
+        .arg("-p").arg(sortie_r2.path())
+        .arg("--threads").arg("4")
+        .assert().success();
+
+    // Vérifier les magic bytes
+    for (nom, sortie) in [("R1", &sortie_r1), ("R2", &sortie_r2)] {
+        let octets = fs::read(sortie.path()).unwrap();
+        assert_eq!(octets[0], 0x1f, "{nom}: premier magic byte gzip");
+        assert_eq!(octets[1], 0x8b, "{nom}: second magic byte gzip");
+    }
+
+    // Décompresser et vérifier la synchronisation
+    let contenu_r1 = decompresser_gz(sortie_r1.path());
+    let contenu_r2 = decompresser_gz(sortie_r2.path());
+
+    let count_r1 = compter_sequences_fastq(&contenu_r1);
+    let count_r2 = compter_sequences_fastq(&contenu_r2);
+
+    assert_eq!(count_r1, 30, "R1 doit contenir 30 séquences uniques");
+    assert_eq!(count_r2, 30, "R2 doit contenir 30 séquences uniques");
+
+    // Vérifier la synchronisation R1/R2
+    let ids_r1: Vec<&str> = contenu_r1
+        .lines().filter(|l| l.starts_with('@'))
+        .map(|l| l.trim_start_matches('@').split_whitespace().next().unwrap_or(l))
+        .collect();
+    let ids_r2: Vec<&str> = contenu_r2
+        .lines().filter(|l| l.starts_with('@'))
+        .map(|l| l.trim_start_matches('@').split_whitespace().next().unwrap_or(l))
+        .collect();
+
+    for (pos, (id1, id2)) in ids_r1.iter().zip(ids_r2.iter()).enumerate() {
+        assert_eq!(id1, id2, "Désynchronisation .gz à la position {pos}: R1={id1}, R2={id2}");
+    }
+}
+
+/// Vérifie que le décompte de séquences est identique entre une sortie .gz
+/// et une sortie non compressée, en mode multi-thread.
+#[test]
+fn test_validation_sortie_gz_vs_non_gz_multi_thread() {
+    let temp_dir = assert_fs::TempDir::new().unwrap();
+    let entree = generer_fastq(&temp_dir, "entree.fastq", 100, 25);
+    let sortie_gz = temp_dir.child("sortie.fastq.gz");
+    let sortie_plain = temp_dir.child("sortie.fastq");
+
+    // Sortie compressée (multi-thread)
+    cmd()
+        .arg("-1").arg(entree.path())
+        .arg("-o").arg(sortie_gz.path())
+        .arg("--threads").arg("4")
+        .assert().success();
+
+    // Sortie non compressée
+    cmd()
+        .arg("-1").arg(entree.path())
+        .arg("-o").arg(sortie_plain.path())
+        .arg("--force")
+        .assert().success();
+
+    let count_gz = compter_sequences_fastq(&decompresser_gz(sortie_gz.path()));
+    let count_plain = compter_sequences_fastq(&fs::read_to_string(sortie_plain.path()).unwrap());
+
+    assert_eq!(
+        count_gz, count_plain,
+        "Sortie .gz et non compressée doivent avoir le même nombre de séquences"
+    );
+    assert_eq!(count_gz, 100, "Doit contenir exactement 100 séquences uniques");
+}

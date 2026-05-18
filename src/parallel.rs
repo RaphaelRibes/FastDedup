@@ -14,7 +14,6 @@ use crate::writer::{OutputFormat, prepare_writer, write_fasta_record};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
 
 use super::DedupConfig;
 
@@ -29,12 +28,17 @@ pub(crate) struct ShardedHashVerifier<T: Hash + Eq> {
 }
 
 impl<T: Hash + Eq> ShardedHashVerifier<T> {
-    pub fn new(capacity: usize, num_shards: usize) -> Self {
+    pub fn new(capacity: usize, num_shards: usize) -> Result<Self> {
         let shard_capacity = (capacity / num_shards).max(1);
-        let shards = (0..num_shards)
-            .map(|_| FxHashSet::with_capacity_and_hasher(shard_capacity, Default::default()))
-            .collect();
-        Self { shards, num_shards }
+        let mut shards = Vec::with_capacity(num_shards);
+        for _ in 0..num_shards {
+            let mut shard = FxHashSet::default();
+            shard
+                .try_reserve(shard_capacity)
+                .map_err(|_| anyhow::anyhow!("OOM: sharded verifier shard allocation failed (capacity: {shard_capacity})"))?;
+            shards.push(shard);
+        }
+        Ok(Self { shards, num_shards })
     }
 
     /// Returns `true` if the hash is newly inserted (unique), `false` if duplicate.
@@ -78,97 +82,136 @@ pub(crate) struct HashedPair<T> {
 const CHUNK_SIZE: usize = 4096;
 
 // ==========================================
+// CHANNEL-BASED PIPE for gzippy streaming
+// ==========================================
+
+/// Writer side: implements `Write` by sending chunks through a crossbeam channel.
+struct ChanWriter {
+    tx: Sender<Vec<u8>>,
+}
+
+impl Write for ChanWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tx.send(buf.to_vec()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gzippy compression thread died")
+        })?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Reader side: implements `Read` by receiving chunks from a crossbeam channel.
+struct ChanReader {
+    rx: Receiver<Vec<u8>>,
+    current: Vec<u8>,
+    pos: usize,
+}
+
+impl Read for ChanReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.current.len() {
+            match self.rx.recv() {
+                Ok(chunk) => {
+                    self.current = chunk;
+                    self.pos = 0;
+                }
+                Err(_) => return Ok(0), // EOF — channel closed
+            }
+        }
+        let avail = &self.current[self.pos..];
+        let n = buf.len().min(avail.len());
+        buf[..n].copy_from_slice(&avail[..n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+// ==========================================
 // HELPERS
 // ==========================================
 
-/// Open a FASTX input as a byte stream, optionally using pigz for parallel gzip
-/// decompression when `pigz_threads > 1` and the path ends with `.gz`.
-fn open_input_reader(
-    path: &str,
-    pigz_threads: usize,
-) -> Result<(Box<dyn Read + Send + 'static>, Option<Child>)> {
-    if pigz_threads > 1 && path.ends_with(".gz") {
-        match Command::new("pigz")
-            .arg("-d")
-            .arg("-p")
-            .arg(pigz_threads.to_string())
-            .arg("-c")
-            .arg(path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => {
-                let stdout = child
-                    .stdout
-                    .take()
-                    .expect("Stdio::piped() guarantees stdout is present");
-                return Ok((Box::new(stdout), Some(child)));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // pigz not available — fall through to direct File read
-            }
-            Err(e) => return Err(e).context("Failed to spawn pigz"),
-        }
+/// Open a FASTX input as a byte stream, using flate2 GzDecoder for gzip
+/// decompression when the path ends with `.gz` (streaming, no subprocess).
+fn open_input_reader(path: &str) -> Result<Box<dyn Read + Send + 'static>> {
+    if path.ends_with(".gz") {
+        let file = File::open(path).with_context(|| format!("Failed to open input file: {path}"))?;
+        Ok(Box::new(flate2::read::GzDecoder::new(file)))
+    } else {
+        let file = File::open(path).with_context(|| format!("Failed to open input file: {path}"))?;
+        Ok(Box::new(file))
     }
-    let file = File::open(path).with_context(|| format!("Failed to open input file: {path}"))?;
-    Ok((Box::new(file), None))
 }
 
-/// Wait on an optional child process and check its exit status.
-fn wait_for_child(child_opt: Option<Child>, label: &str) -> Result<()> {
-    if let Some(mut child) = child_opt {
-        let status = child.wait().context("Failed to wait for child process")?;
-        if !status.success() {
-            bail!("{label} failed with exit code: {:?}", status.code());
+/// Wait on an optional gzippy compression thread handle.
+fn wait_for_gzip_thread(
+    handle_opt: Option<std::thread::JoinHandle<Result<()>>>,
+    label: &str,
+) -> Result<()> {
+    if let Some(handle) = handle_opt {
+        match handle.join() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e.context(format!("{label} failed"))),
+            Err(_) => bail!("{label} thread panicked"),
         }
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
-/// Prepare an output writer, optionally using pigz for parallel gzip compression
-/// when `pigz_threads > 1` and the path ends with `.gz`.
-/// Falls back to `prepare_writer` when pigz is unavailable or output is uncompressed.
+/// Prepare an output writer, optionally using gzippy for parallel gzip compression
+/// when `num_threads > 1`, output is `.gz`, and `compression_level >= 6` (levels
+/// 6+ with threads>1 produce standard gzip; levels <6 with threads>1 produce
+/// gzippy's proprietary "GZ" multi-block format which is not compatible with
+/// standard tools).
+///
+/// Falls back to `prepare_writer` (flate2) otherwise.
+///
+/// Returns (writer, output_format, optional_gzippy_thread_handle).
+///
+/// The gzippy thread handles compressing the stream in the background.
+/// Caller MUST drop the returned writer BEFORE joining the handle.
 fn create_output_writer(
     path: &str,
     compression_level: u32,
-    pigz_threads: usize,
-) -> Result<(Box<dyn Write>, OutputFormat, Option<Child>)> {
+    num_threads: usize,
+) -> Result<(
+    Box<dyn Write>,
+    OutputFormat,
+    Option<std::thread::JoinHandle<Result<()>>>,
+)> {
     let output_path = Path::new(path);
     let output_format = OutputFormat::from_extension(output_path);
     let is_gz = OutputFormat::is_gz(output_path);
 
-    if pigz_threads > 1 && is_gz {
-        // Create the output file up front so pigz can write to it directly
-        let file = File::create(output_path)
-            .with_context(|| format!("Failed to create output file: {path}"))?;
-        match Command::new("pigz")
-            .arg("-p")
-            .arg(pigz_threads.to_string())
-            .arg("-c")
-            .arg(format!("-{}", compression_level))
-            .stdin(Stdio::piped())
-            .stdout(file)
-            .stderr(Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => {
-                let stdin = child
-                    .stdin
-                    .take()
-                    .expect("Stdio::piped() guarantees stdin is present");
-                return Ok((Box::new(stdin), output_format, Some(child)));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // pigz not available — fall through to standard path
-            }
-            Err(e) => return Err(e).context("Failed to spawn pigz for output compression"),
-        }
-    }
+    if is_gz && num_threads > 1 && compression_level >= 6 {
+        // Gzippy parallel compression path — channel-based streaming pipe
+        // Levels 6+ with threads>1 use PipelinedGzEncoder → standard gzip
+        let (tx, rx) = bounded::<Vec<u8>>(16);
+        let writer: Box<dyn Write> = Box::new(ChanWriter { tx });
 
-    // Standard path (no pigz or non-gz output)
-    let (writer, format) = prepare_writer(output_path, true, compression_level)?;
-    Ok((writer, format, None))
+        let out_path = path.to_string();
+        let level = compression_level.min(12) as u8;
+        let handle = std::thread::spawn(move || -> Result<()> {
+            let reader = ChanReader {
+                rx,
+                current: Vec::new(),
+                pos: 0,
+            };
+            let output_file = File::create(&out_path)
+                .with_context(|| format!("Failed to create output file: {out_path}"))?;
+            gzippy::compress_to_writer_with_threads(reader, output_file, level, num_threads)
+                .with_context(|| format!("gzippy compression failed for {out_path}"))?;
+            Ok(())
+        });
+
+        Ok((writer, output_format, Some(handle)))
+    } else {
+        // Standard path: flate2 GzEncoder (standard gzip at any level/threads)
+        let (writer, format) = prepare_writer(output_path, true, compression_level)?;
+        Ok((writer, format, None))
+    }
 }
 
 // ==========================================
@@ -200,8 +243,7 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
         let input_owned = input_path.to_string();
         let has_quality_flag = Arc::clone(&has_quality_flag);
         move || -> Result<usize> {
-            let pigz_threads = num_workers;
-            let (reader, pigz) = open_input_reader(&input_owned, pigz_threads)?;
+            let reader = open_input_reader(&input_owned)?;
             let mut fastx =
                 parse_fastx_reader(reader).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
 
@@ -235,7 +277,6 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
             }
             has_quality_flag.store(has_quality, Ordering::Relaxed);
 
-            wait_for_child(pigz, "pigz decompression")?;
             Ok(total)
         }
     });
@@ -264,16 +305,16 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
     // --- WRITER (this thread) — runs concurrently with reader & workers ---
     let output_path_str = output_path;
     let output_path = Path::new(output_path_str);
-    let pigz_comp_threads = if num_workers > 1 { num_workers } else { 0 };
-    let (writer, output_format, pigz_comp) =
-        create_output_writer(output_path_str, cfg.compression_level, pigz_comp_threads)?;
+    let gzip_threads = if num_workers > 1 { num_workers } else { 0 };
+    let (writer, output_format, gzip_handle) =
+        create_output_writer(output_path_str, cfg.compression_level, gzip_threads)?;
     let buf_size = compute_write_buffer_size(cfg.read_length);
     let mut buffered_writer = BufWriter::with_capacity(buf_size, writer);
 
     let output_has_quality = output_format == OutputFormat::Fastq;
     validate_format_compatibility(output_has_quality, output_format)?;
 
-    let mut verifier = ShardedHashVerifier::<T>::new(cfg.estimated_capacity, num_workers);
+    let mut verifier = ShardedHashVerifier::<T>::new(cfg.estimated_capacity, num_workers)?;
     let mut duplicates = 0;
     let mut processed = 0;
 
@@ -311,9 +352,9 @@ pub(crate) fn execute_deduplication_parallel<T: SequenceHasher + Send + 'static>
     if processed > 0 {
         buffered_writer.flush().context("Failed to flush output")?;
     }
-    // Drop the buffered writer to close pigz's stdin pipe before waiting
+    // Drop the buffered writer to close the channel before joining the gzip thread
     drop(buffered_writer);
-    wait_for_child(pigz_comp, "pigz compression")?;
+    wait_for_gzip_thread(gzip_handle, "gzippy compression")?;
 
     // Join reader to check for errors and get total count
     let total_reads = match reader_handle.join() {
@@ -368,10 +409,8 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
         let r2_owned = input_r2_path.to_string();
         let has_quality_flag = Arc::clone(&has_quality_flag);
         move || -> Result<usize> {
-            // Each file gets half the available threads for decompression
-            let pigz_threads = (num_workers / 2).max(1);
-            let (reader1, pigz1) = open_input_reader(&r1_owned, pigz_threads)?;
-            let (reader2, pigz2) = open_input_reader(&r2_owned, pigz_threads)?;
+            let reader1 = open_input_reader(&r1_owned)?;
+            let reader2 = open_input_reader(&r2_owned)?;
 
             let mut reader_r1 =
                 parse_fastx_reader(reader1).map_err(|e| anyhow::anyhow!("Parse error: {e}"))?;
@@ -444,9 +483,6 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
             }
             has_quality_flag.store(has_quality, Ordering::Relaxed);
 
-            // Wait for both pigz processes to finish
-            wait_for_child(pigz1, "pigz decompression (R1)")?;
-            wait_for_child(pigz2, "pigz decompression (R2)")?;
             Ok(total)
         }
     });
@@ -472,19 +508,15 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
     drop(hash_tx);
 
     // --- WRITER (this thread) — runs concurrently with reader & workers ---
-    let pigz_comp_threads = if num_workers > 1 {
+    let gzip_threads = if num_workers > 1 {
         (num_workers / 2).max(1)
     } else {
         0
     };
-    let (writer_r1, output_format, pigz_comp1) =
-        create_output_writer(output_r1_path, cfg.compression_level, pigz_comp_threads)?;
-    let (writer_r2, output_format_r2, pigz_comp2) =
-        create_output_writer(output_r2_path, cfg.compression_level, pigz_comp_threads)?;
-
-    if output_format != output_format_r2 {
-        bail!("Output files R1 and R2 must have the same format");
-    }
+    let (writer_r1, output_format, gzip_handle1) =
+        create_output_writer(output_r1_path, cfg.compression_level, gzip_threads)?;
+    let (writer_r2, _output_format_r2, gzip_handle2) =
+        create_output_writer(output_r2_path, cfg.compression_level, gzip_threads)?;
 
     let buf_size = compute_write_buffer_size(cfg.read_length);
     let mut buf_r1 = BufWriter::with_capacity(buf_size, writer_r1);
@@ -493,7 +525,7 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
     let output_has_quality = output_format == OutputFormat::Fastq;
     validate_format_compatibility(output_has_quality, output_format)?;
 
-    let mut verifier = ShardedHashVerifier::<T>::new(cfg.estimated_capacity, num_workers);
+    let mut verifier = ShardedHashVerifier::<T>::new(cfg.estimated_capacity, num_workers)?;
     let mut duplicates = 0;
     let mut processed = 0;
 
@@ -539,11 +571,11 @@ pub(crate) fn execute_paired_deduplication_parallel<T: SequenceHasher + Send + '
         buf_r1.flush()?;
         buf_r2.flush()?;
     }
-    // Drop buffered writers to close pigz stdin pipes before waiting
+    // Drop buffered writers to close the channels before joining gzip threads
     drop(buf_r1);
     drop(buf_r2);
-    wait_for_child(pigz_comp1, "pigz compression (R1)")?;
-    wait_for_child(pigz_comp2, "pigz compression (R2)")?;
+    wait_for_gzip_thread(gzip_handle1, "gzippy compression (R1)")?;
+    wait_for_gzip_thread(gzip_handle2, "gzippy compression (R2)")?;
 
     // Join reader to check for errors and get total count
     let total_reads = match reader_handle.join() {

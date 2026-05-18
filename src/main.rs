@@ -11,7 +11,8 @@ use crate::processor::{
     execute_paired_deduplication, execute_paired_deduplication_with_abundance,
 };
 use crate::utils::{
-    birthday_problem_square_approximation, estimate_sequence_capacity, get_hash_method,
+    birthday_problem_square_approximation, count_sequences, estimate_sequence_capacity,
+    get_hash_method,
 };
 use anyhow::{Context, Result, bail};
 use clap::Parser;
@@ -207,6 +208,22 @@ fn main() -> Result<()> {
     } else {
         estimate_sequence_capacity(&args.output, args.read_length).unwrap_or(0)
     };
+
+    // If --pre-count is enabled, replace the file-size estimate with an exact count
+    let pre_count = if args.pre_count {
+        if args.verbose {
+            println!("Pre-counting sequences in: {}", args.input);
+        }
+        let exact = count_sequences(&args.input)?;
+        if args.verbose {
+            println!("  Found {} sequences", exact);
+        }
+        // For PE, R2 must match R1 so we just count the primary input
+        exact
+    } else {
+        0
+    };
+    let cap_input = if args.pre_count { pre_count } else { cap_input };
 
     let total_capacity = cap_input + cap_output;
 

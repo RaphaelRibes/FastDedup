@@ -1,5 +1,5 @@
 use crate::hasher::HashType;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::Path;
 
@@ -69,6 +69,20 @@ pub fn estimate_sequence_capacity<P: AsRef<Path>>(path: P, read_length: usize) -
     let divisor = compute_bytes_per_read(read_length, is_gz);
 
     Ok((file_size_bytes / divisor).clamp(1, MAX_PREALLOC_ENTRIES))
+}
+
+/// Performs a fast first-pass count of sequences in a FASTX file.
+/// Uses needletail's streaming parser — no storage, just counting.
+pub fn count_sequences(path: &str) -> Result<usize> {
+    use needletail::parse_fastx_file;
+    let mut reader = parse_fastx_file(path)
+        .with_context(|| format!("Failed to open input for pre-count: {path}"))?;
+    let mut count = 0;
+    while let Some(r) = reader.next() {
+        r.with_context(|| format!("Invalid sequence at record #{} during pre-count", count + 1))?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Validates that the output format is compatible with the input data.

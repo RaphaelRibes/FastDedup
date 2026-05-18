@@ -88,6 +88,19 @@ pub struct Cli {
     /// When > 1, uses a producer/consumer pipeline for parallel hashing.
     #[arg(long, short = 'j', default_value_t = 1)]
     pub threads: usize,
+
+    /// Pre-count the exact number of sequences by doing a fast first pass over the input.
+    /// This gives the hash table an exact capacity, avoiding both OOM from over-estimation
+    /// and reallocation overhead from under-estimation. Cost: one extra pass through the data.
+    #[arg(long)]
+    pub pre_count: bool,
+
+    /// Directory for the temporary file used in abundance tracking.
+    /// When set, abundance mode stores unique reads in an uncompressed temp file
+    /// during the first pass and reads them back in the second pass (avoids
+    /// re-decompressing the input gzip). Default: re-reads the input gzip.
+    #[arg(long)]
+    pub temp_dir: Option<String>,
 }
 
 /// The selected hash mode (64-bit or 128-bit)
