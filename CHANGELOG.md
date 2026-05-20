@@ -11,6 +11,7 @@
 - **OOM-safe allocations**: All hash tables use `try_reserve` instead of panicking on out-of-memory conditions.
 - **Pre-counting** (`--pre-count`): Scan input first for exact hash table sizing, reducing peak RAM by up to 32%.
 - **Paired-end dry-run desync fix**: Corrected desynchronization detection in paired-end `--dry-run` mode.
+- **Dry-run without output** (`--dry-run` sans `--output`): `--output` devient optionnel quand `--dry-run` est activé. Pratique pour un quick check avant de lancer le vrai run.
 
 ### 🔧 Changes
 
