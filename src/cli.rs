@@ -36,12 +36,13 @@ pub struct Cli {
 
     /// Path to the output file (R1 or Single-End)
     /// Supported formats: .fastq, .fq, .fasta, .fa, .fna (+ .gz for compression)
-    #[arg(short = 'o', long, default_value = "output_R1.fastq.gz")]
-    pub output: String,
+    /// Optional when --dry-run is set.
+    #[arg(short = 'o', long)]
+    pub output: Option<String>,
 
-    /// Path to the R2 output file (Required if --input-r2 is provided)
+    /// Path to the R2 output file (Required if --input-r2 is provided without --dry-run)
     /// Must have the same format as --output
-    #[arg(short = 'p', long, requires = "input_r2")]
+    #[arg(short = 'p', long)]
     pub output_r2: Option<String>,
 
     /// Force overwrite of output files if they exist

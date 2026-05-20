@@ -187,6 +187,26 @@ fn main() -> Result<()> {
         }
     }
 
+    // Resolve output paths: required unless --dry-run
+    let output = match (&args.output, args.dry_run) {
+        (Some(path), _) => path.clone(),
+        (None, true) => String::new(), // dummy, never written in dry-run
+        (None, false) => bail!(
+            "An output file is required. Use --output (-o) to specify one, or --dry-run to only compute stats."
+        ),
+    };
+
+    if args.dry_run && args.abundance {
+        bail!("--abundance is not compatible with --dry-run");
+    }
+
+    // In dry-run mode, output_r2 is optional even when input_r2 is provided
+    if args.input_r2.is_some() && !args.dry_run && args.output_r2.is_none() {
+        bail!(
+            "The --output-r2 (-p) argument is required when --input-r2 (-2) is used (unless --dry-run is set)."
+        );
+    }
+
     if args.hash.is_some() && args.threshold != 0.001 {
         eprintln!(
             "Warning: --hash specifies a hash size, so the automatic selection threshold ({}) is ignored.",
@@ -196,17 +216,21 @@ fn main() -> Result<()> {
 
     if args.verbose {
         println!("Primary input file (R1): {}", args.input);
-        println!("Primary output file (R1): {}", args.output);
+        if args.dry_run && args.output.is_none() {
+            println!("Primary output file (R1): (none, dry-run)");
+        } else {
+            println!("Primary output file (R1): {output}");
+        }
         println!("Expected read length: {} bp", args.read_length);
     }
 
     let cap_input = estimate_sequence_capacity(&args.input, args.read_length)
         .context("Failed to estimate input file capacity")?;
 
-    let cap_output = if args.force {
+    let cap_output = if args.force || (args.dry_run && args.output.is_none()) {
         0
     } else {
-        estimate_sequence_capacity(&args.output, args.read_length).unwrap_or(0)
+        estimate_sequence_capacity(&output, args.read_length).unwrap_or(0)
     };
 
     // If --pre-count is enabled, replace the file-size estimate with an exact count
@@ -239,10 +263,6 @@ fn main() -> Result<()> {
         );
     }
 
-    if args.dry_run && args.abundance {
-        bail!("--abundance is not compatible with --dry-run");
-    }
-
     let cfg = DedupConfig {
         force: args.force,
         verbose: args.verbose,
@@ -258,14 +278,15 @@ fn main() -> Result<()> {
     let start = Instant::now();
 
     let (processed, duplicates) = if let Some(input_r2) = &args.input_r2 {
-        let output_r2 = args
-            .output_r2
-            .as_ref()
-            .context("The --output-r2 (-p) argument is required when --input-r2 (-2) is used.")?;
+        let output_r2 = args.output_r2.as_deref().unwrap_or("");
 
         if args.verbose {
-            println!("Secondary input file (R2): {}", input_r2);
-            println!("Secondary output file (R2): {}", output_r2);
+            println!("Secondary input file (R2): {input_r2}");
+            if output_r2.is_empty() {
+                println!("Secondary output file (R2): (none, dry-run)");
+            } else {
+                println!("Secondary output file (R2): {output_r2}");
+            }
             println!("--- Starting Paired-End Processing ---");
         }
 
@@ -273,7 +294,7 @@ fn main() -> Result<()> {
             dispatch_paired_abundance(
                 &args.input,
                 input_r2,
-                &args.output,
+                &output,
                 output_r2,
                 &selected_hash_type,
                 &cfg,
@@ -282,7 +303,7 @@ fn main() -> Result<()> {
             dispatch_paired_threaded(
                 &args.input,
                 input_r2,
-                &args.output,
+                &output,
                 output_r2,
                 &selected_hash_type,
                 &cfg,
@@ -291,7 +312,7 @@ fn main() -> Result<()> {
             dispatch_paired(
                 &args.input,
                 input_r2,
-                &args.output,
+                &output,
                 output_r2,
                 &selected_hash_type,
                 &cfg,
@@ -303,11 +324,11 @@ fn main() -> Result<()> {
         }
 
         if args.abundance {
-            dispatch_abundance(&args.input, &args.output, &selected_hash_type, &cfg)?
+            dispatch_abundance(&args.input, &output, &selected_hash_type, &cfg)?
         } else if cfg.threads > 1 {
-            dispatch_threaded(&args.input, &args.output, &selected_hash_type, &cfg)?
+            dispatch_threaded(&args.input, &output, &selected_hash_type, &cfg)?
         } else {
-            dispatch(&args.input, &args.output, &selected_hash_type, &cfg)?
+            dispatch(&args.input, &output, &selected_hash_type, &cfg)?
         }
     };
 
