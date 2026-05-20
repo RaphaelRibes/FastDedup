@@ -10,7 +10,7 @@ It utilizes [needletail](https://github.com/onecodex/needletail) for high-perfor
 
 ![benchmark](imgs/PE.svg)
 
-Paper in preparation, you can check it [here](https://gitlab.etu.umontpellier.fr/rapha-l-ribes-m2-internship/fastdedup-paper.git).
+Read the paper on [bioRxiv](https://www.biorxiv.org/content/10.64898/2026.04.29.721745v1).
 
 ## Features
 
@@ -144,6 +144,16 @@ However, if you output to an uncompressed format, FDedup will automatically dete
 - [x] Support tracking sequence **abundances** (counts) instead of naive discarding.
 - [x] Add a possibility for exporting sequences as **FASTA**.
 - [x] Improve error handling.
+
+## Citation
+
+If you use FastDedup in your work, please cite:
+
+> Ribes R., Mandier C., Baniel A. FastDedup: a fast and memory-efficient tool for read deduplication. *bioRxiv* 2026.04.29.721745 (2026). doi:[10.64898/2026.04.29.721745](https://www.biorxiv.org/content/10.64898/2026.04.29.721745v1)
+
+Additionally, the specific software version can be cited via Zenodo:
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19630793.svg)](https://doi.org/10.5281/zenodo.19630793)
 
 ## License
 
