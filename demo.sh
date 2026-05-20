@@ -74,7 +74,7 @@ echo "Attendu : 3 fragments traités, 1 doublon supprimé (33.33%)"
 ./target/release/fdedup \
     -1 demo_data/single.fastq \
     -o demo_data/single_dedup.fastq \
-    -v
+    -v -s
 echo -e "\n"
 
 # 4. Lancement du mode Paired-End
@@ -83,6 +83,8 @@ echo "Attendu : 3 fragments traités, 1 doublon supprimé (33.33%)"
 ./target/release/fdedup \
     -1 demo_data/R1.fastq \
     -2 demo_data/R2.fastq \
+    -o demo_data/R1_dedup.fastq \
+    -p demo_data/R2_dedup.fastq \
     -v -s
 echo -e "\n"
 
