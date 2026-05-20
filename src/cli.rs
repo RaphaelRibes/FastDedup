@@ -31,7 +31,8 @@ pub struct Cli {
     pub input: String,
 
     /// Path to the R2 input FASTX file (Optional, enables Paired-End mode)
-    #[arg(short = '2', long, requires = "output_r2")]
+    /// --output-r2 is required unless --dry-run is set.
+    #[arg(short = '2', long)]
     pub input_r2: Option<String>,
 
     /// Path to the output file (R1 or Single-End)
