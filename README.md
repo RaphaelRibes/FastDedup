@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/badge/Version-1.2.0-blue)
+![Version](https://img.shields.io/badge/Version-1.3.0-blue)
 [![Crates.io](https://img.shields.io/crates/v/fastdedup?color=orange&label=cargo)](https://crates.io/crates/fastdedup)
 [![Conda Receipt](https://img.shields.io/badge/install%20with-bioconda-brightgreen)](https://anaconda.org/bioconda/fdedup)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19630793.svg)](https://doi.org/10.5281/zenodo.19630793)
@@ -6,7 +6,7 @@
 # FastDedup
 
 FastDedup (FDedup) is a fast and memory-efficient FASTX PCR deduplication tool written in Rust.
-It utilizes [needletail](https://github.com/onecodex/needletail) for high-performance sequence parsing, [xxh3](https://github.com/DoumanAsh/xxhash-rust) for rapid hashing, and [fxhash](https://github.com/cbreeden/fxhash) for a low-overhead memory cache.
+It utilizes [needletail](https://github.com/onecodex/needletail) for high-performance sequence parsing, [xxh3](https://github.com/DoumanAsh/xxhash-rust) for rapid hashing, and [rustc-hash](https://github.com/rust-lang/rustc-hash) for a low-overhead memory cache.
 
 ![benchmark](imgs/PE.svg)
 
@@ -151,9 +151,11 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Author
 
-[Raphaël Ribes](https://www.raphaelrib.es) (coding and design)
+[Raphaël Ribes](https://www.raphaelrib.es) - ISDM, Univ Montpellier, CIRAD, INSERM, Montpellier, France (coding and design)
 
-[Céline Mandier](https://gitlab.in2p3.fr/celine.mandier1) (design)
+[Céline Mandier](https://gitlab.in2p3.fr/celine.mandier1) - ISDM, Univ Montpellier, CIRAD, INSERM, Montpellier, France (design)
+
+[Alice Baniel](mailto:alice.baniel@umontpellier.fr) - ISEM, Univ Montpellier, CNRS, IRD, Montpellier, France (funding)
 
 # Acknowledgements
 
