@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          cache: true
+      # The tests run --offline, so the registry must be primed first: on a fresh
+      # runner ~/.cargo is empty and resolution fails before anything runs.
+      - run: pixi run cargo fetch
+      - run: pixi run build
+      - run: pixi run test
