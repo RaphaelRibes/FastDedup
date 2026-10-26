@@ -1,0 +1,23 @@
+# Cargo configuration for this repository.
+#
+# The conda toolchain pixi's env provides (sysroot_linux-64 2.28) ships a Scrt1.o
+# that references __libc_csu_init/__libc_csu_fini — symbols glibc removed in 2.34
+# — and its cc driver links against that sysroot. Linking a Rust binary inside
+# the pixi env therefore fails on a machine whose system glibc also lacks them:
+#
+#   rust-lld: error: undefined symbol: __libc_csu_init
+#       >>> referenced by .../sysroot/usr/lib/../lib64/Scrt1.o:(_start)
+#
+# The fix: link the FINAL Rust binary with the SYSTEM compiler and the system
+# glibc. Build scripts (cc, cmake for zlib-ng/libdeflate/zstd) still use the
+# conda toolchain via $CC — they work fine; only the final link was broken.
+#
+# `-fuse-ld=bfd` is not optional: with the system cc but the default lld, the
+# link crashes inside LLVM instead of failing cleanly.
+#
+# The only system dependency this creates is gcc (build-essential on Debian,
+# gcc on CachyOS). If /usr/bin/cc is missing, install it.
+
+[target.x86_64-unknown-linux-gnu]
+linker = "/usr/bin/cc"
+rustflags = ["-C", "link-arg=-fuse-ld=bfd"]
