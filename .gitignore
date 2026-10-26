@@ -1,17 +1,11 @@
-# pixi environments
-.pixi/*
-!.pixi/config.toml
-.idea
-
-# Added by cargo
-
 /target
-dev
-fastqc
-multiqc_data
-data
-fdedup.sif
-fdedup.def
-benchmark/bin/
-demo_data
-fdedup*.tar.gz
+# fasthelper's CLI tests write their reports into the working directory
+report.html
+report.json
+report.md
+report.tsv
+fastsuite_run/
+
+# analysis leftovers
+*.pyc
+__pycache__/
